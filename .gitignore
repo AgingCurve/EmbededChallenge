@@ -1,1 +1,26 @@
 .DS_Store
+# macOS
+.DS_Store
+.AppleDouble
+._*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Build artifacts
+build/
+Debug/
+Release/
+*.o
+*.obj
+*.elf
+*.bin
+*.hex
+*.map
+*.list
+
+# STM32CubeIDE
+.metadata/
+*.launch
