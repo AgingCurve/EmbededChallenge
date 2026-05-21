@@ -49,12 +49,47 @@
   * @{
   */ 
 
+/*
+ * TODO : Need To Calibration these Values.. Like PWM and each mode values. And.. TICK will be modified 
+ */
+
 /* Private typedef -----------------------------------------------------------*/
 #define  PERIOD_VALUE       0xFFFF  /* Period Value  */
 #define  PULSE1_VALUE       0xFFFF        /* Capture Compare 1 Value  */
 #define  PULSE2_VALUE       900         /* Capture Compare 2 Value  */
 #define  PULSE3_VALUE       600         /* Capture Compare 3 Value  */
 #define  PULSE4_VALUE       450         /* Capture Compare 4 Value  */
+
+#define D_TARGET        15      /* ìš°ì¸¡ ë²½ê¹Œì§€ ëª©í‘œ ê±°ë¦¬ */
+#define D_MIN           8       /* ì•ˆì „ í•˜í•œ */
+#define D_OPEN          35      /* ìš°ì¸¡ "ì—´ë¦¼" íŒì • ì„ê³„ (ì½”ë„ˆ/êµì°¨ì  ì˜ì‹¬) */
+#define K_FRONT         28      /* ì „ë°© íŠ¸ë¦¬ê±° (íšŒì „ ê²°ì •) â€” ë” ì¼ì° ë°˜ì‘ */
+#define EMG_FRONT       6       /* ë¹„ìƒì •ì§€ ì´ˆê·¼ì ‘ */
+#define W_SAFE          8       /* íšŒì „ ê°€ëŠ¥ ì ˆëŒ€ ì¸¡ë©´ ì—¬ìœ  â€” ë” ë„ˆê·¸ëŸ½ê²Œ */
+#define R_CLEAR         8       /* ì œìë¦¬ íšŒì „ì— í•„ìš”í•œ ì‚¬ë°© ìµœì†Œ ì—¬ìœ  */
+#define MOVE_TH         2       /* í•œ í‹±ë‹¹ ë³€í™”ëŸ‰ì´ ì´ë§Œí¼ì´ë©´ "ì ‘ê·¼/ì´íƒˆ" â€” ë” ë¯¼ê° */
+
+/* PWM ë“€í‹° (0~20000 PERIOD, term_code ê¸°ì¤€) */ 
+#define PWM_PERIOD      20000
+#define V_MAX           16000   /* ì§ì„  ìµœëŒ€ ì†ë„ */
+#define V_CRUISE        13000   /* ì¼ë°˜ ìˆœí•­ */
+#define V_SLOW          9000    /* ì‹ ì¤‘ ì£¼í–‰ */
+#define V_TURN          11000   /* ì œìë¦¬ íšŒì „ ë“€í‹° */
+#define V_CREEP         7000    /* ì •ë ¬/íƒìƒ‰ ì €ì† */
+
+/* ì‹œê°„(ms) â€” 20ms í‹± ê¸°ì¤€ */
+#define CTRL_PERIOD_MS  20
+#define SENS_PERIOD_MS  20
+#define IR_PERIOD_MS    20
+#define T_DEADLOCK_MS   2000    /* ì •ì§€Â·ì–‘ë³´ê°€ ì´ë§Œí¼ ì•ˆ í’€ë¦¬ë©´ ë¹„ëŒ€ì¹­ ìš°íšŒ */
+#define ALIGN_TIMEOUT   1500
+#define SEARCH_TIMEOUT  3000
+
+/* IR ADC ì„ê³„ (12bit raw, term_code ì˜ 1000 ë³´ë‹¤ ì•½ê°„ ë³´ìˆ˜ì ) */
+#define IR_BUMP_HIGH    1100    /* ì¢Œ/ìš° IR ì´ ì´ ê°’ ì´ìƒì´ë©´ ì¶©ëŒ ì§ì „ */
+
+/* ì•ˆì •ë„ ë¶„ì‚° ì„ê³„ */
+#define VAR_UNSTABLE    20      /* í‘œë³¸ í‘œì¤€í¸ì°¨ cm ê°€ ì´ ì´ìƒì´ë©´ ë¶ˆì•ˆì • */
 
 /* Private define ------------------------------------------------------------*/
 /* Private macro -------------------------------------------------------------*/
@@ -66,27 +101,17 @@ TIM_IC_InitTypeDef     sICConfig;
 /* Timer Output Compare Configuration Structure declaration */
 TIM_OC_InitTypeDef sConfig1, sConfig2, sConfig3;
 
-/* Counter Prescaler value */
+/* Counter Prescaler value - Motor*/
 uint32_t uwPrescalerValue = 0;
-uint16_t motorInterrupt1 = 0;
-uint16_t motorInterrupt2 = 0;
-
+uint16_t motorInterrupt1 = 0; /* Right Encoder */
+uint16_t motorInterrupt2 = 0; /* Left Encoder */
 uint8_t encoder_right = READY ;
 uint8_t encoder_left  = READY ;
     
- /* Captured Values */
-uint32_t               uwIC2Value1 = 0;
-uint32_t               uwIC2Value2 = 0;
-uint32_t               uwDiffCapture1 = 0;
-   
-uint32_t               uwIC2Value3 = 0;
-uint32_t               uwIC2Value4 = 0;
-uint32_t               uwDiffCapture2 = 0;
-
-uint32_t               uwIC2Value5 = 0;
-uint32_t               uwIC2Value6= 0;
-uint32_t               uwDiffCapture3 = 0;
-
+ /* Captured Values In UltraSonic Sensor*/
+uint32_t uwIC2Value1 = 0; uwIC2Value2 = 0; uwDiffCapture1 = 0; /* Right UltraSonic Sensor */
+uint32_t uwIC2Value3 = 0; uwIC2Value4 = 0; uwDiffCapture2 = 0; /* Forward UltraSonic Sensor*/
+uint32_t uwIC2Value5 = 0; uwIC2Value6 = 0; uwDiffCapture3 = 0; /* Left UltraSonic Sensor*/
 uint32_t               uwFrequency = 0;
 
 /* ADC handler declaration */
@@ -98,6 +123,23 @@ ADC_ChannelConfTypeDef sConfig;
 __IO uint32_t uhADCxRight;
 __IO uint32_t uhADCxForward;
 __IO uint32_t uhADCxLeft;   
+
+/* =========================================================================
+ *  Drive State / Shared Data
+ * TODO : 
+ * 1. Clearly Define below state
+ * ========================================================================= */
+
+ typedef enum {
+   START = 0,  /* Initial State */
+   SEEK,       /* Automatically transfer this state from START state */
+   ALIGNED,    /* Aligned Nearest Wall */
+   LOCKED,     /* Every Sensor shows under D_MIN */
+   EMERGENCY,  /* !Maybe need clear definition!*/
+   INTERSECT,  /* need more idea.. base is */
+   ENCOUNT,    /* Encount Moved Obstacle.. maybe we found */
+   STOP,       /* Final or Some.. Some.. Emergency State */
+ }
 
 /* Private function prototypes -----------------------------------------------*/
 static void SystemClock_Config(void);
@@ -114,6 +156,10 @@ static void Error_Handler(void);
 
 extern UART_HandleTypeDef UartHandle1, UartHandle2;
 
+/* =========================================================================
+ * printf -> UART 
+ * ========================================================================= */
+
 #ifdef __GNUC__
   /* With GCC/RAISONANCE, small printf (option LD Linker->Libraries->Small printf
      set to 'Yes') calls __io_putchar() */
@@ -121,15 +167,14 @@ extern UART_HandleTypeDef UartHandle1, UartHandle2;
 #else
   #define PUTCHAR_PROTOTYPE int fputc(int ch, FILE *f)
 #endif /* __GNUC__ */
-   
 PUTCHAR_PROTOTYPE
 {
    /* Place your implementation of fputc here */
    /* e.g. write a character to the EVAL_COM1 and Loop until the end of transmission */
    HAL_UART_Transmit(&UartHandle1, (uint8_t *)&ch, 1, 0xFFFF); 
-
    return ch;
 }
+
 
 /**
   * @brief  Main program.
@@ -139,38 +184,41 @@ PUTCHAR_PROTOTYPE
 
 /*********************************  task ************************************/
 uint32_t flag = 0;
-/*flagº¯¼ö¸¦ ÀÌ¿ëÇØ¼­ Detect_obstacle¿¡¼­ °¡±î¿î ¹°Ã¼°¡ ÀÖ´Â °æ¿ì, flagº¯°æ ÈÄ
-Motor_control¿¡¼­ µÚ·Î ¸ØÃß°í µÚ·Î °¡µµ·Ï */
+/*flagë³€ìˆ˜ë¥¼ ì´ìš©í•´ì„œ Detect_obstacleì—ì„œ ê°€ê¹Œìš´ ë¬¼ì²´ê°€ ìˆëŠ” ê²½ìš°, flagë³€ê²½ í›„
+Motor_controlì—ì„œ ë’¤ë¡œ ë©ˆì¶”ê³  ë’¤ë¡œ ê°€ë„ë¡ */
 
-
+/** 
+ * @brief
+ * @param None
+ * @retval None 
+ * @note
+ */
 void Detect_obstacle(){
-  osDelay(200);  // ÅÂ½ºÅ© ¸¸µç ÈÄ ¾à°£ÀÇ µô·¹ÀÌ
+  osDelay(200);  // íƒœìŠ¤í¬ ë§Œë“  í›„ ì•½ê°„ì˜ ë”œë ˆì´
 	printf("\r\n Detect_obstacle");
 
 	for(;;)
     {
-		osDelay(500);  //0.5 ÃÊ¸¶´Ù °ªÀ» ÀĞ¾î¿Â´Ù.(ÀÚÀ¯·Ó°Ô º¯°æÇÒ °Í)
+		osDelay(500);  //0.5 ì´ˆë§ˆë‹¤ ê°’ì„ ì½ì–´ì˜¨ë‹¤.(ììœ ë¡­ê²Œ ë³€ê²½í•  ê²ƒ)
 		if(uwDiffCapture2/58 < 15){
-         flag = 1;
       }
-						//¿©±â¿¡ ÃÊÀ½ÆÄ ÃøÁ¤ °ü·Ã ÄÚµå ÀÛ¼º
+						//ì—¬ê¸°ì— ì´ˆìŒíŒŒ ì¸¡ì • ê´€ë ¨ ì½”ë“œ ì‘ì„±
 			
     }
 }
 
 void Motor_control(){
-	osDelay(200);  // ÅÂ½ºÅ© ¸¸µç ÈÄ ¾à°£ÀÇ µô·¹ÀÌ
+	osDelay(200);  // íƒœìŠ¤í¬ ë§Œë“  í›„ ì•½ê°„ì˜ ë”œë ˆì´
 	printf("\r\n Motor_control");
-	Motor_Forward();  //ÅÂ½ºÅ© ½ÃÀÛ½Ã ÀüÁøÇÑ´Ù.
+	Motor_Forward();  //íƒœìŠ¤í¬ ì‹œì‘ì‹œ ì „ì§„í•œë‹¤.
 	
    for(;;){
       if(flag == 1) {
-         Motor_stop();
       }
    }
 }
 
-/*Àû¿Ü¼± ÅÂ½ºÅ© ºÎºĞ - ³ªÁß¿¡ »ç¿ë(¼±ÅÃ) */
+/*ì ì™¸ì„  íƒœìŠ¤í¬ ë¶€ë¶„ - ë‚˜ì¤‘ì— ì‚¬ìš©(ì„ íƒ) */
 void IR_Sensor(){
    for(;;){
       
@@ -215,11 +263,11 @@ int main(void)
 	
 	
 	
-    /************************************** ¸ğÅÍ ½ÃÀÛ **************************************/
+    /************************************** ëª¨í„° ì‹œì‘ **************************************/
    uwPrescalerValue = (SystemCoreClock/2)/1000000;
    
 
-   // PB2 ¸ğÅÍ Àü¿ø ÀÎ°¡¸¦ À§ÇÑ GPIO ÃÊ±âÈ­
+   // PB2 ëª¨í„° ì „ì› ì¸ê°€ë¥¼ ìœ„í•œ GPIO ì´ˆê¸°í™”
    __GPIOB_CLK_ENABLE();
       
    GPIO_InitStruct.Pin = GPIO_PIN_2;
@@ -229,7 +277,7 @@ int main(void)
       
    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
    
-   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2, GPIO_PIN_SET); // MC_EN(PB2) ¸ğÅÍ Àü¿ø 
+   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2, GPIO_PIN_SET); // MC_EN(PB2) ëª¨í„° ì „ì› 
    
    sConfig1.OCMode     = TIM_OCMODE_PWM1;
    sConfig1.OCPolarity = TIM_OCPOLARITY_HIGH;
@@ -263,11 +311,11 @@ int main(void)
    HAL_TIM_PWM_ConfigChannel(&TimHandle2, &sConfig2, TIM_CHANNEL_2);
 
    EXTILine_Config(); // Encoder Interrupt Setting
-   /************************************** ¸ğÅÍ ³¡ **************************************/
+   /************************************** ëª¨í„° ë **************************************/
 	 
 	 
 	 
-	  /************************************** ÃÊÀ½ÆÄ ½ÃÀÛ **************************************/
+	  /************************************** ì´ˆìŒíŒŒ ì‹œì‘ **************************************/
    uwPrescalerValue = ((SystemCoreClock / 2) / 1000000) - 1;   
 	 
    /* Set TIMx instance */
@@ -319,17 +367,17 @@ int main(void)
   
    /* Start channel 3 */   
    HAL_TIM_PWM_Start(&TimHandle4, TIM_CHANNEL_1);
-	 /************************************** ÃÊÀ½ÆÄ ³¡**************************************/
+	 /************************************** ì´ˆìŒíŒŒ ë**************************************/
 	 
    
-	 /************************************** Àû¿Ü¼± ½ÃÀÛ**************************************/
+	 /************************************** ì ì™¸ì„  ì‹œì‘**************************************/
 	 
-   AdcHandle1.Instance          = ADC3;   // ADC 3¹øºĞ
+   AdcHandle1.Instance          = ADC3;   // ADC 3ë²ˆë¶„
   
    AdcHandle1.Init.ClockPrescaler = ADC_CLOCKPRESCALER_PCLK_DIV2;
    AdcHandle1.Init.Resolution = ADC_RESOLUTION12b;
    AdcHandle1.Init.ScanConvMode = DISABLE;
-   // Mode ¼³Á¤
+   // Mode ì„¤ì •
    AdcHandle1.Init.ContinuousConvMode = DISABLE;
    AdcHandle1.Init.DiscontinuousConvMode = DISABLE;
    AdcHandle1.Init.NbrOfDiscConversion = 0;  
@@ -343,14 +391,14 @@ int main(void)
 
    HAL_ADC_Init(&AdcHandle1);//ADC Initialized
 
-   adcConfig1.Channel = ADC_CHANNEL_11; //Ã¤³Î ¼³Á¤
+   adcConfig1.Channel = ADC_CHANNEL_11; //ì±„ë„ ì„¤ì •
    adcConfig1.Rank = 1;
-   adcConfig1.SamplingTime = ADC_SAMPLETIME_480CYCLES; //»ùÇÃ¸µ ÁÖ±â ¼³Á¤
+   adcConfig1.SamplingTime = ADC_SAMPLETIME_480CYCLES; //ìƒ˜í”Œë§ ì£¼ê¸° ì„¤ì •
    adcConfig1.Offset = 0;
 
    HAL_ADC_ConfigChannel(&AdcHandle1, &adcConfig1);
       
-   AdcHandle2.Instance          = ADC2;   // ADCºÎºĞ
+   AdcHandle2.Instance          = ADC2;   // ADCë¶€ë¶„
 
    AdcHandle2.Init.ClockPrescaler = ADC_CLOCKPRESCALER_PCLK_DIV2;
    AdcHandle2.Init.Resolution = ADC_RESOLUTION12b;
@@ -374,7 +422,7 @@ int main(void)
 
    HAL_ADC_ConfigChannel(&AdcHandle2, &adcConfig2);
    
-   AdcHandle3.Instance          = ADC1;   // ADCºÎºĞ
+   AdcHandle3.Instance          = ADC1;   // ADCë¶€ë¶„
 
    AdcHandle3.Init.ClockPrescaler = ADC_CLOCKPRESCALER_PCLK_DIV2;
    AdcHandle3.Init.Resolution = ADC_RESOLUTION12b;
@@ -396,12 +444,12 @@ int main(void)
    adcConfig3.SamplingTime = ADC_SAMPLETIME_480CYCLES;
    adcConfig3.Offset = 0;   
    HAL_ADC_ConfigChannel(&AdcHandle3, &adcConfig3);
-		/************************************** Àû¿Ü¼± ³¡**************************************/            
+		/************************************** ì ì™¸ì„  ë**************************************/            
             
    
-	 /**** ES+L10.+Embedded+OS - 27 page Âü°í ****/
+	 /**** ES+L10.+Embedded+OS - 27 page ì°¸ê³  ****/
 		 
-	 /**********¿©±â¿¡ Task ¸¦ »ı¼ºÇÏ½Ã¿À********/	
+	 /**********ì—¬ê¸°ì— Task ë¥¼ ìƒì„±í•˜ì‹œì˜¤********/	
 	 
 	 
 	 //xTaskCreate( IR_Sensor, "IR_Sensor", 1000, NULL, 1, NULL);
