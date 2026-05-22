@@ -14,16 +14,12 @@ ISLAND 없다고 가정시 T-Stem(5), OPEN(6)은 없는걸로 볼 수 있음.
 <img width="1472" height="1030" alt="image" src="https://github.com/user-attachments/assets/cc1a77b3-5687-4951-8b78-e307a2785b40" />
 
 
-## Non-Island Premised
-- Dynamic Tacking Premised
-- Parallel with wall Straight 
 #### Sensing Layer
-We need to maintain the current 7 signal as a confidence measure for the observed values. also we can know rate of change. 
+We maintain a 7-sample window per signal, giving us both the filtered value and its confidence measure. The rate of change is also available.
 #### Motor Layer
-We can choose a drive mode. and need to make straight-like motion based on rate of change, 
-but, check some drift.(as operating time increases, adaptive coordinate systems.)
+The robot supports multiple drive modes. We maintain straight-line motion based on the rate of change between sensor readings, while compensating for drift using adaptive coordinate systems that scale with operating time.
 #### Control Layer
-Based on an FSM (Finite State Machine), handle transition logic and condition checks. Wall-switching logic is also needed.
+An FSM handles state transitions and condition checks. Wall-switching logic is also required for dynamic tracking selection.
 
 ## Island Premised
 - Dynamic Tracking Premised
