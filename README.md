@@ -18,12 +18,12 @@ ISLAND 없다고 가정시 T-Stem(5), OPEN(6)은 없는걸로 볼 수 있음.
 - Dynamic Tacking Premised
 - Parallel with wall Straight 
 #### Sensing Layer
-We need maintain current 7 signal as confidence of these observed value. also we can know rate of change. 
+We need to maintain the current 7 signal as a confidence measure for the observed values. also we can know rate of change. 
 #### Motor Layer
-We can choose drive mode. and need to make straight like based on rate of change, 
-but, check some drift.(as far as from operating time, adaptive coorder Systems.)
+We can choose a drive mode. and need to make straight-like motion based on rate of change, 
+but, check some drift.(as operating time increases, adaptive coordinate systems.)
 #### Control Layer
-based on FSM(Finite State Machine), transfer logic and checking conditions. also need switching tracking logics.. 
+Based on an FSM (Finite State Machine), handle transition logic and condition checks. Wall-switching logic is also needed.
 
 ## Island Premised
 - Dynamic Tracking Premised
