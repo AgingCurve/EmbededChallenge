@@ -11,7 +11,8 @@
 ISLAND 없다고 가정시 T-Stem(5), OPEN(6)은 없는걸로 볼 수 있음.
 
 ## Finite State Machine
-<img width="1472" height="940" alt="image" src="https://github.com/user-attachments/assets/c565d8a1-b2dd-49ef-9c51-c8d5a318f502" />
+<img width="1472" height="1030" alt="image" src="https://github.com/user-attachments/assets/cc1a77b3-5687-4951-8b78-e307a2785b40" />
+
 
 ## Non-Island Premised
 - Dynamic Tacking Premised
@@ -33,3 +34,26 @@ based on FSM(Finite State Machine), transfer logic and checking conditions. also
 #### Control Layer
 
 #### ++Coorder Layer
+---
+## Functions
+#### UltraSonicTask
+###### Subfunction
+- `int median7(int *)`
+- `int stddev7(int *)`
+###### Mainfunction
+- `void SensorTask(void)`
+#### IR_Task
+###### Mainfunction
+- `void IR_Task(void)`
+#### ControlTask
+###### Subfunction
+- `void Motor_Drive(int v_left, int v_right)`
+- `void Motor_Stop(void)`
+- `void switchTracking(void)`
+- `void angleAdjusting(void)`
+- `int  angleCalculate(void)`
+- `uint8_t canProgressDirection(void)`
+- `bool isEmergency(void)`
+- `bool emergencyResolved(void)`
+###### Mainfunction
+- `void ControlTask(void)`
