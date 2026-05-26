@@ -19,6 +19,36 @@
 #include "cmsis_os.h"
 
 /* ===========================================================================
+ *  Calibration / tunables  (tune everything here)
+ * =========================================================================== */
+/* Sensing */
+#define SAMPLE_N          7        /* sliding window length per signal */
+#define US_TICKS_PER_CM   58       /* TIM3 IC diff -> cm divisor       */
+
+/* Task timing (ms) */
+#define CTRL_PERIOD_MS    20
+#define SENS_PERIOD_MS    20
+#define IR_PERIOD_MS      20
+#define TASK_WARMUP_MS    200
+#define CTRL_WARMUP_MS    300
+
+/* Distance thresholds (cm) */
+#define D_TARGET          15       /* wall-follow target distance */
+#define D_MIN             8        /* lower safety bound          */
+#define EMG_FRONT         6        /* emergency front threshold   */
+#define EMG_FRONT_HYST    2        /* +cm margin to clear EMERGENCY */
+
+/* Motor PWM */
+#define PWM_PERIOD        20000
+#define V_CRUISE          20000    /* duty for SEEK forward drive */
+
+/* HC-SR04 trigger */
+#define TRIG_PULSE        2
+
+/* ADC */
+#define ADC_POLL_TIMEOUT  0xFF
+
+/* ===========================================================================
  *  Peripherals
  * =========================================================================== */
 TIM_HandleTypeDef    TimHandle1, TimHandle2, TimHandle3, TimHandle4;
@@ -237,14 +267,13 @@ uint8_t canProgressDirection(void)
 
 bool isEmergency(void)
 {
-    if (dF > 0 && dF <= EMG_FRONT)       return true;
-    if (ir_floor > IR_BUMP_HIGH)         return true;
-    return false;
+    /* Floor IR not wired on this build -> rely on front ultrasonic only. */
+    return (dF > 0 && dF <= EMG_FRONT);
 }
 
 bool emergencyResolved(void)
 {
-    return (dF > EMG_FRONT + EMG_FRONT_HYST) && (ir_floor < IR_BUMP_HIGH - IR_BUMP_HYST);
+    return (dF > EMG_FRONT + EMG_FRONT_HYST);
 }
 
 /* ===========================================================================
