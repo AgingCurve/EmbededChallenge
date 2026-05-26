@@ -17,8 +17,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "cmsis_os.h"
-#include "FreeRTOS.h"
-#include "task.h"
 
 /* ===========================================================================
  *  Peripherals
@@ -73,8 +71,8 @@ static void Error_Handler(void);
 /* Sensing */
 int  median7(int *a);
 int  stddev7(int *a);
-void SensorTask(void *arg);
-void IR_Task(void *arg);
+void SensorTask(void);
+void IR_Task(void);
 
 /* Control */
 void    Motor_Drive(int v_left, int v_right);
@@ -85,7 +83,7 @@ int     angleCalculate(void);
 uint8_t canProgressDirection(void);
 bool    isEmergency(void);
 bool    emergencyResolved(void);
-void    ControlTask(void *arg);
+void    ControlTask(void);
 
 /* ===========================================================================
  *  printf -> UART
@@ -97,10 +95,7 @@ void    ControlTask(void *arg);
 #endif
 PUTCHAR_PROTOTYPE
 {
-    /* TEMP: UART disabled to test whether HAL_UART_Transmit is faulting on bad handle.
-     * If LED3 lights up after this change, UART is the culprit. */
-    (void)ch;
-    /* HAL_UART_Transmit(&UartHandle1, (uint8_t *)&ch, 1, 1); */
+    HAL_UART_Transmit(&UartHandle1, (uint8_t *)&ch, 1, 0xFFFF);
     return ch;
 }
 
@@ -137,9 +132,8 @@ int stddev7(int *a)
     return s;
 }
 
-void SensorTask(void *arg)
+void SensorTask(void)
 {
-    (void)arg;
     osDelay(TASK_WARMUP_MS);
     for (;;) {
         us_buf_F[us_idx] = (int)(uwDiffCapture2 / US_TICKS_PER_CM);
@@ -162,9 +156,8 @@ void SensorTask(void *arg)
 /* ===========================================================================
  *  Sensing Layer — IR_Task
  * =========================================================================== */
-void IR_Task(void *arg)
+void IR_Task(void)
 {
-    (void)arg;
     osDelay(TASK_WARMUP_MS);
     for (;;) {
         HAL_ADC_Start(&AdcHandle1);
@@ -208,10 +201,10 @@ void Motor_Drive(int v_left, int v_right)
 
 void Motor_Stop(void)
 {
-    HAL_TIM_PWM_Stop(&TimHandle1, TIM_CHANNEL_1);
-    HAL_TIM_PWM_Stop(&TimHandle1, TIM_CHANNEL_2);
-    HAL_TIM_PWM_Stop(&TimHandle2, TIM_CHANNEL_1);
-    HAL_TIM_PWM_Stop(&TimHandle2, TIM_CHANNEL_2);
+    /* Keep PWM channels running; just zero the duty so motor coasts.
+     * (HAL_TIM_PWM_Stop would disable the channel and subsequent
+     *  Motor_Drive(CCR=..) writes would produce no output.) */
+    Motor_Drive(0, 0);
 }
 
 /* ===========================================================================
@@ -257,9 +250,8 @@ bool emergencyResolved(void)
 /* ===========================================================================
  *  Control Layer — FSM
  * =========================================================================== */
-void ControlTask(void *arg)
+void ControlTask(void)
 {
-    (void)arg;
     static const char *state_name[] = {
         "START","SEEK","ALIGNED","LOCKED","EMERGENCY","INTERSECT","ENCOUNT","STOP"
     };
@@ -325,20 +317,9 @@ int main(void)
     GPIO_InitTypeDef GPIO_InitStruct;
 
     HAL_Init();
-
-    /* Marker A: HAL_Init OK */
-    BSP_LED_Init(LED1);
-    BSP_LED_Init(LED2);
-    BSP_LED_Init(LED3);
-    BSP_LED_Init(LED4);
-    BSP_LED_On(LED1);
-
     SystemClock_Config();
-    BSP_LED_On(LED2);                       /* Marker B: clock OK */
-
     BSP_COM1_Init();
-    printf("\r\n[BOOT A] HAL+CLK+UART OK\r\n");
-    HAL_Delay(200);
+    BSP_LED_Init(LED1);   /* heartbeat in ControlTask */
 
     /* -------- Motor PWM (TIM8 right, TIM4 left) -------- */
     uwPrescalerValue = (SystemCoreClock / 2) / 1000000;
@@ -354,7 +335,7 @@ int main(void)
     sConfig1.OCMode     = TIM_OCMODE_PWM1;
     sConfig1.OCPolarity = TIM_OCPOLARITY_HIGH;
     sConfig1.OCFastMode = TIM_OCFAST_DISABLE;
-    sConfig1.Pulse      = V_CRUISE;             /* initial duty (CCR re-written by Motor_Drive) */
+    sConfig1.Pulse      = 0;                    /* CCR set by Motor_Drive at runtime */
 
     TimHandle1.Instance               = TIM8;
     TimHandle1.Init.Prescaler         = uwPrescalerValue;
@@ -375,18 +356,15 @@ int main(void)
     HAL_TIM_PWM_ConfigChannel(&TimHandle2, &sConfig2, TIM_CHANNEL_1);
     HAL_TIM_PWM_ConfigChannel(&TimHandle2, &sConfig2, TIM_CHANNEL_2);
 
-    /* Start all 4 motor PWM channels once; direction/duty is gated by CCR in Motor_Drive */
-    TIM8->CCR1 = 0; TIM8->CCR2 = 0;
-    TIM4->CCR1 = 0; TIM4->CCR2 = 0;
+    /* Start all 4 motor PWM channels once; Motor_Drive only updates CCR */
     HAL_TIM_PWM_Start(&TimHandle1, TIM_CHANNEL_1);
     HAL_TIM_PWM_Start(&TimHandle1, TIM_CHANNEL_2);
     HAL_TIM_PWM_Start(&TimHandle2, TIM_CHANNEL_1);
     HAL_TIM_PWM_Start(&TimHandle2, TIM_CHANNEL_2);
-    BSP_LED_On(LED3);                            /* Marker C1: motor PWM init+start OK */
+    TIM8->CCR1 = 0; TIM8->CCR2 = 0;
+    TIM4->CCR1 = 0; TIM4->CCR2 = 0;
 
     EXTILine_Config();
-    printf("[BOOT B] motor PWM + EXTI OK\r\n");
-    HAL_Delay(100);
 
     /* -------- Ultrasonic input capture (TIM3 CH2/3/4) -------- */
     uwPrescalerValue = ((SystemCoreClock / 2) / 1000000) - 1;
@@ -424,8 +402,6 @@ int main(void)
     sConfig3.Pulse      = TRIG_PULSE;
     HAL_TIM_PWM_ConfigChannel(&TimHandle4, &sConfig3, TIM_CHANNEL_1);
     HAL_TIM_PWM_Start(&TimHandle4, TIM_CHANNEL_1);
-    printf("[BOOT C] ultrasonic TIM3/TIM10 OK\r\n");
-    HAL_Delay(100);
 
     /* -------- IR ADC1/2/3 -------- */
     AdcHandle1.Instance                   = ADC3;
@@ -461,22 +437,13 @@ int main(void)
     adcConfig3 = adcConfig1;
     adcConfig3.Channel = ADC_CHANNEL_15;
     HAL_ADC_ConfigChannel(&AdcHandle3, &adcConfig3);
-    printf("[BOOT D] ADC1/2/3 OK\r\n");
-    BSP_LED_On(LED4);                        /* Marker E: all periph init done (incl ADC) */
-    HAL_Delay(200);
 
-    /* -------- RTOS tasks -------- */
-    xTaskCreate(SensorTask,  "SensorTask",  TASK_STACK_WORDS, NULL, PRIO_SENSOR,  NULL);
-    xTaskCreate(IR_Task,     "IR_Task",     TASK_STACK_WORDS, NULL, PRIO_IR,      NULL);
-    xTaskCreate(ControlTask, "ControlTask", TASK_STACK_WORDS, NULL, PRIO_CONTROL, NULL);
-    printf("[BOOT E] xTaskCreate done, starting scheduler...\r\n");
-    HAL_Delay(100);
-    BSP_LED_Off(LED1);                       /* LED1 OFF here -> ControlTask toggle proves scheduler runs */
+    /* -------- RTOS tasks (sizes match main_good) -------- */
+    xTaskCreate(SensorTask,  "sensor",   512, NULL, 3, NULL);
+    xTaskCreate(IR_Task,     "ir",       512, NULL, 3, NULL);
+    xTaskCreate(ControlTask, "control", 1024, NULL, 2, NULL);
     vTaskStartScheduler();
 
-    /* If we get here, scheduler FAILED to start. LED2 = post-scheduler fall-through */
-    BSP_LED_On(LED2);
-    printf("[BOOT] !! vTaskStartScheduler returned — scheduler failed\r\n");
     while (1) { }
 }
 
