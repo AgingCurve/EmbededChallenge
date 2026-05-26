@@ -51,10 +51,10 @@
 #define TRIG_PULSE        2      /* TIM10 CH1 trigger pulse for HC-SR04 */
 
 /* ---------- RTOS task params ---------- */
-#define TASK_STACK_WORDS  256
+#define TASK_STACK_WORDS  1024   /* matches working term_code (printf is hungry) */
 #define PRIO_SENSOR       2
 #define PRIO_IR           2
-#define PRIO_CONTROL      1
+#define PRIO_CONTROL      2
 
 /* ---------- FSM ---------- */
 typedef enum {

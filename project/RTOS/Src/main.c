@@ -188,6 +188,11 @@ void IR_Task(void *arg)
  * =========================================================================== */
 void Motor_Drive(int v_left, int v_right)
 {
+    /* PWM channels are pre-started in main(); we just gate by CCR.
+     * CCR = 0 with PWM1 mode -> output always LOW (channel idle).
+     * TIM8: CH1=right fwd, CH2=right rev
+     * TIM4: CH2=left  fwd, CH1=left  rev
+     */
     int aL = v_left  < 0 ? -v_left  : v_left;
     int aR = v_right < 0 ? -v_right : v_right;
     if (aL > PWM_PERIOD) aL = PWM_PERIOD;
@@ -197,11 +202,6 @@ void Motor_Drive(int v_left, int v_right)
     else              { TIM8->CCR1 = 0;  TIM8->CCR2 = aR; }
     if (v_left  >= 0) { TIM4->CCR2 = aL; TIM4->CCR1 = 0;  }
     else              { TIM4->CCR2 = 0;  TIM4->CCR1 = aL; }
-
-    HAL_TIM_PWM_Start(&TimHandle1, TIM_CHANNEL_1);
-    HAL_TIM_PWM_Start(&TimHandle1, TIM_CHANNEL_2);
-    HAL_TIM_PWM_Start(&TimHandle2, TIM_CHANNEL_1);
-    HAL_TIM_PWM_Start(&TimHandle2, TIM_CHANNEL_2);
 }
 
 void Motor_Stop(void)
@@ -267,7 +267,9 @@ void ControlTask(void *arg)
     for (;;) {
         if (isEmergency()) state = EMERGENCY;
 
-        if ((tick++ % 25) == 0) {   /* ~500ms */
+        /* LED1 toggles every ~500ms -> visual proof scheduler is alive */
+        if ((tick++ % 25) == 0) {
+            BSP_LED_Toggle(LED1);
             printf("\r\n[%s] dF=%d dL=%d dR=%d | sF=%d sL=%d sR=%d | irF=%d irL=%d irR=%d",
                    state_name[state], dF, dL, dR, sF, sL, sR, ir_floor, ir_left, ir_right);
         }
@@ -350,7 +352,7 @@ int main(void)
     sConfig1.OCMode     = TIM_OCMODE_PWM1;
     sConfig1.OCPolarity = TIM_OCPOLARITY_HIGH;
     sConfig1.OCFastMode = TIM_OCFAST_DISABLE;
-    sConfig1.Pulse      = 0;
+    sConfig1.Pulse      = V_CRUISE;             /* initial duty (CCR re-written by Motor_Drive) */
 
     TimHandle1.Instance               = TIM8;
     TimHandle1.Init.Prescaler         = uwPrescalerValue;
@@ -370,6 +372,14 @@ int main(void)
     HAL_TIM_PWM_Init(&TimHandle2);
     HAL_TIM_PWM_ConfigChannel(&TimHandle2, &sConfig2, TIM_CHANNEL_1);
     HAL_TIM_PWM_ConfigChannel(&TimHandle2, &sConfig2, TIM_CHANNEL_2);
+
+    /* Start all 4 motor PWM channels once; direction/duty is gated by CCR in Motor_Drive */
+    TIM8->CCR1 = 0; TIM8->CCR2 = 0;
+    TIM4->CCR1 = 0; TIM4->CCR2 = 0;
+    HAL_TIM_PWM_Start(&TimHandle1, TIM_CHANNEL_1);
+    HAL_TIM_PWM_Start(&TimHandle1, TIM_CHANNEL_2);
+    HAL_TIM_PWM_Start(&TimHandle2, TIM_CHANNEL_1);
+    HAL_TIM_PWM_Start(&TimHandle2, TIM_CHANNEL_2);
 
     EXTILine_Config();
     printf("[BOOT B] motor PWM + EXTI OK\r\n");
@@ -458,6 +468,7 @@ int main(void)
     xTaskCreate(ControlTask, "ControlTask", TASK_STACK_WORDS, NULL, PRIO_CONTROL, NULL);
     printf("[BOOT E] xTaskCreate done, starting scheduler...\r\n");
     HAL_Delay(100);
+    BSP_LED_Off(LED1);                       /* LED1 OFF here -> ControlTask toggle proves scheduler runs */
     vTaskStartScheduler();
 
     /* If we get here, scheduler FAILED to start. LED2 = post-scheduler fall-through */
