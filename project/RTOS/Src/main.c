@@ -97,8 +97,10 @@ void    ControlTask(void *arg);
 #endif
 PUTCHAR_PROTOTYPE
 {
-    /* 1ms timeout: if UART isn't wired up, printf returns instead of hanging boot */
-    HAL_UART_Transmit(&UartHandle1, (uint8_t *)&ch, 1, 1);
+    /* TEMP: UART disabled to test whether HAL_UART_Transmit is faulting on bad handle.
+     * If LED3 lights up after this change, UART is the culprit. */
+    (void)ch;
+    /* HAL_UART_Transmit(&UartHandle1, (uint8_t *)&ch, 1, 1); */
     return ch;
 }
 
@@ -380,6 +382,7 @@ int main(void)
     HAL_TIM_PWM_Start(&TimHandle1, TIM_CHANNEL_2);
     HAL_TIM_PWM_Start(&TimHandle2, TIM_CHANNEL_1);
     HAL_TIM_PWM_Start(&TimHandle2, TIM_CHANNEL_2);
+    BSP_LED_On(LED3);                            /* Marker C1: motor PWM init+start OK */
 
     EXTILine_Config();
     printf("[BOOT B] motor PWM + EXTI OK\r\n");
@@ -459,7 +462,7 @@ int main(void)
     adcConfig3.Channel = ADC_CHANNEL_15;
     HAL_ADC_ConfigChannel(&AdcHandle3, &adcConfig3);
     printf("[BOOT D] ADC1/2/3 OK\r\n");
-    BSP_LED_On(LED3);                        /* Marker E: all periph init done */
+    BSP_LED_On(LED4);                        /* Marker E: all periph init done (incl ADC) */
     HAL_Delay(200);
 
     /* -------- RTOS tasks -------- */
