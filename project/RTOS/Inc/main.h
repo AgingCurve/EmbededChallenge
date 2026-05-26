@@ -29,7 +29,7 @@
 
 /* ---------- Motor layer ---------- */
 #define PWM_PERIOD      20000    /* TIM ARR; duty range = [-PWM_PERIOD, +PWM_PERIOD] */
-#define V_CRUISE        13000
+#define V_CRUISE        20000   /* full duty for now — back off after motion confirmed */
 
 /* ---------- Control thresholds (minimum baseline; tune later) ---------- */
 #define CTRL_PERIOD_MS    20

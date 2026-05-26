@@ -257,9 +257,19 @@ bool emergencyResolved(void)
 void ControlTask(void const *arg)
 {
     (void)arg;
+    static const char *state_name[] = {
+        "START","SEEK","ALIGNED","LOCKED","EMERGENCY","INTERSECT","ENCOUNT","STOP"
+    };
+    uint32_t tick = 0;
+
     osDelay(CTRL_WARMUP_MS);
     for (;;) {
         if (isEmergency()) state = EMERGENCY;
+
+        if ((tick++ % 25) == 0) {   /* ~500ms */
+            printf("\r\n[%s] dF=%d dL=%d dR=%d | sF=%d sL=%d sR=%d | irF=%d irL=%d irR=%d",
+                   state_name[state], dF, dL, dR, sF, sL, sR, ir_floor, ir_left, ir_right);
+        }
 
         switch (state) {
             case START:
