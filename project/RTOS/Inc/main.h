@@ -1,72 +1,66 @@
 /**
   ******************************************************************************
-  * @file    TIM/TIM_PWMOutput/Inc/main.h 
-  * @author  MCD Application Team
-  * @version V1.0.1
-  * @date    26-February-2014
-  * @brief   Header for main.c module
-  ******************************************************************************
-  * @attention
-  *
-  * <h2><center>&copy; COPYRIGHT(c) 2014 STMicroelectronics</center></h2>
-  *
-  * Redistribution and use in source and binary forms, with or without modification,
-  * are permitted provided that the following conditions are met:
-  *   1. Redistributions of source code must retain the above copyright notice,
-  *      this list of conditions and the following disclaimer.
-  *   2. Redistributions in binary form must reproduce the above copyright notice,
-  *      this list of conditions and the following disclaimer in the documentation
-  *      and/or other materials provided with the distribution.
-  *   3. Neither the name of STMicroelectronics nor the names of its contributors
-  *      may be used to endorse or promote products derived from this software
-  *      without specific prior written permission.
-  *
-  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-  * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-  * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-  * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-  * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-  * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-  *
+  * @file    main.h
+  * @brief   Baseline header — shared types/macros per README spec.
   ******************************************************************************
   */
 
-/* Define to prevent recursive inclusion -------------------------------------*/
 #ifndef __MAIN_H
 #define __MAIN_H
 
-/* Includes ------------------------------------------------------------------*/
 #include "stm32f4xx_hal.h"
 #include "stm324x9i_eval.h"
+#include <stdbool.h>
+#include <stdint.h>
 
-/* Exported types ------------------------------------------------------------*/
-/* Exported constants --------------------------------------------------------*/
-/* User can use this section to tailor TIMx instance used and associated 
-   resources */
-	 
-/* Definition for ADCx clock resources */
+/* ---------- BSP / ADC legacy macros (kept from template) ---------- */
 #define ADCx                            ADC3
 #define ADCx_CLK_ENABLE()               __ADC3_CLK_ENABLE();
 #define ADCx_CHANNEL_GPIO_CLK_ENABLE()  __GPIOF_CLK_ENABLE()
-     
 #define ADCx_FORCE_RESET()              __ADC_FORCE_RESET()
 #define ADCx_RELEASE_RESET()            __ADC_RELEASE_RESET()
-
-/* Definition for ADCx Channel Pin */
 #define ADCx_CHANNEL_PIN                GPIO_PIN_10
-#define ADCx_CHANNEL_GPIO_PORT          GPIOF 
-
-/* Definition for ADCx's Channel */
+#define ADCx_CHANNEL_GPIO_PORT          GPIOF
 #define ADCx_CHANNEL                    ADC_CHANNEL_8
-#define READY 3
+#define READY                           3
 
-/* Exported macro ------------------------------------------------------------*/
-/* Exported functions ------------------------------------------------------- */
+/* ---------- Sensing layer ---------- */
+#define SAMPLE_N        7        /* per-signal sliding window (README) */
+
+/* ---------- Motor layer ---------- */
+#define PWM_PERIOD      20000    /* TIM ARR; duty range = [-PWM_PERIOD, +PWM_PERIOD] */
+#define V_CRUISE        13000
+
+/* ---------- Control thresholds (minimum baseline; tune later) ---------- */
+#define CTRL_PERIOD_MS  20
+#define SENS_PERIOD_MS  20
+#define IR_PERIOD_MS    20
+
+#define D_TARGET        15       /* wall-follow target distance (cm)   */
+#define D_MIN           8        /* lower safety bound (cm)            */
+#define EMG_FRONT       6        /* emergency front threshold (cm)     */
+#define IR_BUMP_HIGH    1100     /* IR ADC raw threshold for contact   */
+
+/* ---------- FSM ---------- */
+typedef enum {
+    START = 0,   /* Initial state */
+    SEEK,        /* Search for a wall to track */
+    ALIGNED,     /* Aligned with nearest wall (cruise) */
+    LOCKED,      /* All sides under D_MIN — escape needed */
+    EMERGENCY,   /* Imminent collision / IR contact */
+    INTERSECT,   /* Junction / corner decision */
+    ENCOUNT,     /* Moving obstacle encountered */
+    STOP         /* Halted */
+} DriveState;
+
+typedef enum {
+    TRACK_LEFT = 0,
+    TRACK_RIGHT
+} TrackingSide;
+
+/* canProgressDirection() return bitmask */
+#define DIR_LEFT     0x01
+#define DIR_FORWARD  0x02
+#define DIR_RIGHT    0x04
 
 #endif /* __MAIN_H */
-
-/************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/
