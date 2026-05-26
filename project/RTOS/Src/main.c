@@ -137,11 +137,11 @@ int stddev7(int *a)
 void SensorTask(void const *arg)
 {
     (void)arg;
-    osDelay(200);
+    osDelay(TASK_WARMUP_MS);
     for (;;) {
-        us_buf_F[us_idx] = (int)(uwDiffCapture2 / 58);
-        us_buf_L[us_idx] = (int)(uwDiffCapture3 / 58);
-        us_buf_R[us_idx] = (int)(uwDiffCapture1 / 58);
+        us_buf_F[us_idx] = (int)(uwDiffCapture2 / US_TICKS_PER_CM);
+        us_buf_L[us_idx] = (int)(uwDiffCapture3 / US_TICKS_PER_CM);
+        us_buf_R[us_idx] = (int)(uwDiffCapture1 / US_TICKS_PER_CM);
         us_idx = (us_idx + 1) % SAMPLE_N;
 
         dF_prev = dF; dL_prev = dL; dR_prev = dR;
@@ -162,18 +162,18 @@ void SensorTask(void const *arg)
 void IR_Task(void const *arg)
 {
     (void)arg;
-    osDelay(200);
+    osDelay(TASK_WARMUP_MS);
     for (;;) {
         HAL_ADC_Start(&AdcHandle1);
-        HAL_ADC_PollForConversion(&AdcHandle1, 0xFF);
+        HAL_ADC_PollForConversion(&AdcHandle1, ADC_POLL_TIMEOUT);
         ir_left  = (int)HAL_ADC_GetValue(&AdcHandle1);
 
         HAL_ADC_Start(&AdcHandle2);
-        HAL_ADC_PollForConversion(&AdcHandle2, 0xFF);
+        HAL_ADC_PollForConversion(&AdcHandle2, ADC_POLL_TIMEOUT);
         ir_right = (int)HAL_ADC_GetValue(&AdcHandle2);
 
         HAL_ADC_Start(&AdcHandle3);
-        HAL_ADC_PollForConversion(&AdcHandle3, 0xFF);
+        HAL_ADC_PollForConversion(&AdcHandle3, ADC_POLL_TIMEOUT);
         ir_floor = (int)HAL_ADC_GetValue(&AdcHandle3);
 
         osDelay(IR_PERIOD_MS);
@@ -248,7 +248,7 @@ bool isEmergency(void)
 
 bool emergencyResolved(void)
 {
-    return (dF > EMG_FRONT + 2) && (ir_floor < IR_BUMP_HIGH - 100);
+    return (dF > EMG_FRONT + EMG_FRONT_HYST) && (ir_floor < IR_BUMP_HIGH - IR_BUMP_HYST);
 }
 
 /* ===========================================================================
@@ -257,7 +257,7 @@ bool emergencyResolved(void)
 void ControlTask(void const *arg)
 {
     (void)arg;
-    osDelay(300);
+    osDelay(CTRL_WARMUP_MS);
     for (;;) {
         if (isEmergency()) state = EMERGENCY;
 
@@ -268,7 +268,9 @@ void ControlTask(void const *arg)
                 break;
 
             case SEEK:
-                /* TODO: rotate/creep until a wall is detected; switchTracking(). */
+                /* TODO: rotate/creep until a wall is detected; switchTracking().
+                 * Minimal: drive straight forward. */
+                Motor_Drive(V_CRUISE, V_CRUISE);
                 break;
 
             case ALIGNED:
@@ -381,7 +383,7 @@ int main(void)
     sConfig3.OCMode     = TIM_OCMODE_PWM1;
     sConfig3.OCPolarity = TIM_OCPOLARITY_HIGH;
     sConfig3.OCFastMode = TIM_OCFAST_DISABLE;
-    sConfig3.Pulse      = 2;
+    sConfig3.Pulse      = TRIG_PULSE;
     HAL_TIM_PWM_ConfigChannel(&TimHandle4, &sConfig3, TIM_CHANNEL_1);
     HAL_TIM_PWM_Start(&TimHandle4, TIM_CHANNEL_1);
 
@@ -421,9 +423,9 @@ int main(void)
     HAL_ADC_ConfigChannel(&AdcHandle3, &adcConfig3);
 
     /* -------- RTOS tasks -------- */
-    xTaskCreate((TaskFunction_t)SensorTask,  "SensorTask",  256, NULL, 2, NULL);
-    xTaskCreate((TaskFunction_t)IR_Task,     "IR_Task",     256, NULL, 2, NULL);
-    xTaskCreate((TaskFunction_t)ControlTask, "ControlTask", 256, NULL, 1, NULL);
+    xTaskCreate((TaskFunction_t)SensorTask,  "SensorTask",  TASK_STACK_WORDS, NULL, PRIO_SENSOR,  NULL);
+    xTaskCreate((TaskFunction_t)IR_Task,     "IR_Task",     TASK_STACK_WORDS, NULL, PRIO_IR,      NULL);
+    xTaskCreate((TaskFunction_t)ControlTask, "ControlTask", TASK_STACK_WORDS, NULL, PRIO_CONTROL, NULL);
     vTaskStartScheduler();
 
     while (1) { }

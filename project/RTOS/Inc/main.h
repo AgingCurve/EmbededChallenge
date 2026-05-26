@@ -32,14 +32,29 @@
 #define V_CRUISE        13000
 
 /* ---------- Control thresholds (minimum baseline; tune later) ---------- */
-#define CTRL_PERIOD_MS  20
-#define SENS_PERIOD_MS  20
-#define IR_PERIOD_MS    20
+#define CTRL_PERIOD_MS    20
+#define SENS_PERIOD_MS    20
+#define IR_PERIOD_MS      20
 
-#define D_TARGET        15       /* wall-follow target distance (cm)   */
-#define D_MIN           8        /* lower safety bound (cm)            */
-#define EMG_FRONT       6        /* emergency front threshold (cm)     */
-#define IR_BUMP_HIGH    1100     /* IR ADC raw threshold for contact   */
+#define D_TARGET          15     /* wall-follow target distance (cm)   */
+#define D_MIN             8      /* lower safety bound (cm)            */
+#define EMG_FRONT         6      /* emergency front threshold (cm)     */
+#define IR_BUMP_HIGH      1100   /* IR ADC raw threshold for contact   */
+
+/* ---------- Calibration / tunables ---------- */
+#define US_TICKS_PER_CM   58     /* TIM3 IC diff -> cm divisor          */
+#define EMG_FRONT_HYST    2      /* +cm  margin to clear EMERGENCY      */
+#define IR_BUMP_HYST      100    /* -raw margin to clear EMERGENCY      */
+#define TASK_WARMUP_MS    200    /* sensor task startup delay           */
+#define CTRL_WARMUP_MS    300    /* control task startup delay          */
+#define ADC_POLL_TIMEOUT  0xFF   /* HAL_ADC_PollForConversion timeout   */
+#define TRIG_PULSE        2      /* TIM10 CH1 trigger pulse for HC-SR04 */
+
+/* ---------- RTOS task params ---------- */
+#define TASK_STACK_WORDS  256
+#define PRIO_SENSOR       2
+#define PRIO_IR           2
+#define PRIO_CONTROL      1
 
 /* ---------- FSM ---------- */
 typedef enum {
