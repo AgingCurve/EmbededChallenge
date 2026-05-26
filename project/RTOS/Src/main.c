@@ -432,12 +432,27 @@ int main(void)
     adcConfig3.Channel = ADC_CHANNEL_15;
     HAL_ADC_ConfigChannel(&AdcHandle3, &adcConfig3);
 
+    /* -------- Pre-scheduler sanity: UART + LED -------- */
+    BSP_LED_Init(LED1);
+    BSP_LED_Init(LED2);
+    BSP_LED_On(LED1);                        /* LED1 ON  -> reached pre-scheduler */
+    printf("\r\n[BOOT] pre-scheduler reached, UART OK\r\n");
+    HAL_Delay(500);
+
     /* -------- RTOS tasks -------- */
-    xTaskCreate(SensorTask,  "SensorTask",  TASK_STACK_WORDS, NULL, PRIO_SENSOR,  NULL);
-    xTaskCreate(IR_Task,     "IR_Task",     TASK_STACK_WORDS, NULL, PRIO_IR,      NULL);
-    xTaskCreate(ControlTask, "ControlTask", TASK_STACK_WORDS, NULL, PRIO_CONTROL, NULL);
+    BaseType_t r1 = xTaskCreate(SensorTask,  "SensorTask",  TASK_STACK_WORDS, NULL, PRIO_SENSOR,  NULL);
+    BaseType_t r2 = xTaskCreate(IR_Task,     "IR_Task",     TASK_STACK_WORDS, NULL, PRIO_IR,      NULL);
+    BaseType_t r3 = xTaskCreate(ControlTask, "ControlTask", TASK_STACK_WORDS, NULL, PRIO_CONTROL, NULL);
+    printf("[BOOT] xTaskCreate r1=%ld r2=%ld r3=%ld (1=OK)\r\n", (long)r1, (long)r2, (long)r3);
+    HAL_Delay(500);
+
+    printf("[BOOT] starting scheduler...\r\n");
+    HAL_Delay(100);
     vTaskStartScheduler();
 
+    /* If we get here, scheduler FAILED to start. LED2 = post-scheduler fall-through */
+    BSP_LED_On(LED2);
+    printf("[BOOT] !! vTaskStartScheduler returned — scheduler failed\r\n");
     while (1) { }
 }
 
