@@ -35,12 +35,13 @@
 /* Distance thresholds (cm) */
 #define D_TARGET          15       /* wall-follow target distance */
 #define D_MIN             8        /* lower safety bound          */
-#define EMG_FRONT         6        /* emergency front threshold   */
+#define EMG_FRONT         20        /* emergency front threshold   */
 #define EMG_FRONT_HYST    2        /* +cm margin to clear EMERGENCY */
 
 /* Motor PWM */
 #define PWM_PERIOD        20000
 #define V_CRUISE          20000    /* duty for SEEK forward drive */
+#define V_TURN            18000    /* duty for in-place pivot (each wheel) */
 
 /* HC-SR04 trigger */
 #define TRIG_PULSE        2
@@ -306,11 +307,13 @@ void ControlTask(void *arg)
                 state = SEEK;
                 break;
 
-            case SEEK:
-                /* TODO: rotate/creep until a wall is detected; switchTracking().
-                 * Minimal: drive straight forward. */
-                Motor_Drive(V_CRUISE, V_CRUISE);
-                break;
+            case SEEK: {
+                /* Drive forward; veer away from whichever side gets too close. */
+                int vL = V_CRUISE, vR = V_CRUISE;
+                if (dR > 0 && dR < D_MIN) vR = V_CRUISE / 2;   /* right wall close -> curve left */
+                if (dL > 0 && dL < D_MIN) vL = V_CRUISE / 2;   /* left  wall close -> curve right */
+                Motor_Drive(vL, vR);
+            } break;
 
             case ALIGNED:
                 /* TODO: cruise. angleAdjusting() each tick; watch dF for INTERSECT. */
@@ -321,7 +324,11 @@ void ControlTask(void *arg)
                 break;
 
             case EMERGENCY:
-                Motor_Stop();
+                /* Front blocked: pivot in place toward the more open side.
+                 * dL >= dR -> left is more open -> pivot left  (CCW: -L, +R)
+                 * dL <  dR -> right is more open -> pivot right (CW : +L, -R) */
+                if (dL >= dR) Motor_Drive(-V_TURN,  V_TURN);
+                else          Motor_Drive( V_TURN, -V_TURN);
                 if (emergencyResolved()) state = SEEK;
                 break;
 
