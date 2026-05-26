@@ -70,8 +70,8 @@
 void HAL_ADC_MspInit(ADC_HandleTypeDef* hadc)
 {
    GPIO_InitTypeDef          GPIO_InitStruct;
-	// ADC GPIO ¼³Á¤
-	if(hadc->Instance ==  ADC3)  // left   <<  ADC1 , ADC2,  ADC3 Áß ÇÏ³ª  ³ÖÀ» °Í.
+	// ADC GPIO ï¿½ï¿½ï¿½ï¿½
+	if(hadc->Instance ==  ADC3)  // left   <<  ADC1 , ADC2,  ADC3 ï¿½ï¿½ ï¿½Ï³ï¿½  ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½.
 	{
 		/*##-1- Enable peripherals and GPIO Clocks #################################*/
 		/* ADC3 Periph clock enable */
@@ -125,14 +125,8 @@ void HAL_ADC_MspInit(ADC_HandleTypeDef* hadc)
   */
 void HAL_ADC_MspDeInit(ADC_HandleTypeDef *hadc)
 {
-  
-  /*##-1- Reset peripherals ##################################################*/
-  ADCx_FORCE_RESET();
-  ADCx_RELEASE_RESET();
-
-  /*##-2- Disable peripherals and GPIO Clocks ################################*/
-  /* De-initialize the ADC3 Channel8 GPIO pin */
-  HAL_GPIO_DeInit(ADCx_CHANNEL_GPIO_PORT, ADCx_CHANNEL_PIN);
+    (void)hadc;
+    /* Empty: we never call HAL_ADC_DeInit. Removed legacy ADCx_* macro refs. */
 }
 
 

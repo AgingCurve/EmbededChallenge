@@ -101,8 +101,8 @@ static void Error_Handler(void);
 /* Sensing */
 int  median7(int *a);
 int  stddev7(int *a);
-void SensorTask(void);
-void IR_Task(void);
+void SensorTask(void *arg);
+void IR_Task(void *arg);
 
 /* Control */
 void    Motor_Drive(int v_left, int v_right);
@@ -113,7 +113,7 @@ int     angleCalculate(void);
 uint8_t canProgressDirection(void);
 bool    isEmergency(void);
 bool    emergencyResolved(void);
-void    ControlTask(void);
+void    ControlTask(void *arg);
 
 /* ===========================================================================
  *  printf -> UART
@@ -162,8 +162,9 @@ int stddev7(int *a)
     return s;
 }
 
-void SensorTask(void)
+void SensorTask(void *arg)
 {
+    (void)arg;
     osDelay(TASK_WARMUP_MS);
     for (;;) {
         us_buf_F[us_idx] = (int)(uwDiffCapture2 / US_TICKS_PER_CM);
@@ -186,8 +187,9 @@ void SensorTask(void)
 /* ===========================================================================
  *  Sensing Layer — IR_Task
  * =========================================================================== */
-void IR_Task(void)
+void IR_Task(void *arg)
 {
+    (void)arg;
     osDelay(TASK_WARMUP_MS);
     for (;;) {
         HAL_ADC_Start(&AdcHandle1);
@@ -279,8 +281,9 @@ bool emergencyResolved(void)
 /* ===========================================================================
  *  Control Layer — FSM
  * =========================================================================== */
-void ControlTask(void)
+void ControlTask(void *arg)
 {
+    (void)arg;
     static const char *state_name[] = {
         "START","SEEK","ALIGNED","LOCKED","EMERGENCY","INTERSECT","ENCOUNT","STOP"
     };
