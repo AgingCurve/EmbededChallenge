@@ -93,6 +93,12 @@ int ir_floor = 0, ir_left = 0, ir_right = 0;
 DriveState   state = START;
 TrackingSide side  = TRACK_RIGHT;
 
+/* EMERGENCY commit state: lock turn direction until SEEK is stable for a while */
+static bool emerg_committed = false;
+static bool emerg_turn_left = false;
+static int  seek_clear_ticks = 0;
+#define EMERG_RELEASE_TICKS  25     /* ~500ms of clear SEEK -> release commit */
+
 /* ===========================================================================
  *  Forward declarations
  * =========================================================================== */
@@ -328,6 +334,9 @@ void ControlTask(void *arg)
                 if (dR > 0 && dR < D_MIN) vR = V_CRUISE / 2;   /* right wall close -> curve left */
                 if (dL > 0 && dL < D_MIN) vL = V_CRUISE / 2;   /* left  wall close -> curve right */
                 Motor_Drive(vL, vR);
+
+                /* Release direction commitment after stable SEEK time */
+                if (++seek_clear_ticks >= EMERG_RELEASE_TICKS) emerg_committed = false;
             } break;
 
             case ALIGNED:
@@ -339,11 +348,15 @@ void ControlTask(void *arg)
                 break;
 
             case EMERGENCY:
-                /* Front blocked: pivot 90° toward the more open side, then re-evaluate.
-                 * Blocking; ControlTask pauses ~TURN_90_MS while turning. */
+                /* Front blocked. Pivot 90° in a committed direction (no flip-flop). */
+                if (!emerg_committed) {
+                    emerg_turn_left = (dL >= dR);   /* first pivot: pick more open */
+                    emerg_committed = true;
+                }
+                seek_clear_ticks = 0;               /* re-arm release counter */
                 Motor_Stop();
-                osDelay(50);                  /* settle before pivot */
-                rotate(90, dL >= dR);         /* dL>=dR -> pivot left */
+                osDelay(50);
+                rotate(90, emerg_turn_left);
                 state = SEEK;
                 break;
 
