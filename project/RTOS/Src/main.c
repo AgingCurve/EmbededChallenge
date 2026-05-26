@@ -116,6 +116,7 @@ void IR_Task(void *arg);
 void    Motor_Drive(int v_left, int v_right);
 void    Motor_Stop(void);
 void    rotate(int degrees, bool left);
+void    rotate_to_side(bool left);
 void    switchTracking(void);
 void    angleAdjusting(void);
 int     angleCalculate(void);
@@ -261,6 +262,31 @@ void rotate(int degrees, bool left)
     Motor_Stop();
 }
 
+/* Sensor-driven 90° pivot — no time calibration needed.
+ * Snapshots the side distance, then rotates until front reads near that value.
+ * `min_ms` avoids premature exit on transient dF readings.
+ * `max_ms` is a safety timeout if convergence never happens (open space). */
+void rotate_to_side(bool left)
+{
+    const int min_ms = 200;
+    const int max_ms = 2500;
+    const int tol    = 3;       /* cm */
+    int target = left ? dR : dL;
+    int elapsed = 0;
+
+    if (left) Motor_Drive(-V_TURN,  V_TURN);
+    else      Motor_Drive( V_TURN, -V_TURN);
+
+    while (elapsed < max_ms) {
+        osDelay(20);
+        elapsed += 20;
+        int diff = dF - target;
+        if (diff < 0) diff = -diff;
+        if (elapsed >= min_ms && dF > 0 && diff <= tol) break;
+    }
+    Motor_Stop();
+}
+
 /* ===========================================================================
  *  Control Layer — helpers
  * =========================================================================== */
@@ -347,18 +373,22 @@ void ControlTask(void *arg)
                 /* TODO: all sides under D_MIN — back off and re-seek. */
                 break;
 
-            case EMERGENCY:
-                /* Front blocked. Pivot 90° in a committed direction (no flip-flop). */
-                if (!emerg_committed) {
-                    emerg_turn_left = (dL >= dR);   /* first pivot: pick more open */
+            case EMERGENCY: {
+                bool first = !emerg_committed;
+                if (first) {
+                    emerg_turn_left = (dL >= dR);
                     emerg_committed = true;
                 }
-                seek_clear_ticks = 0;               /* re-arm release counter */
+                seek_clear_ticks = 0;
+                int target = emerg_turn_left ? dR : dL;
+                printf("\r\n>> EMERG turn=%s commit=%s dF=%d->%d dL=%d dR=%d",
+                       emerg_turn_left ? "LEFT" : "RIGHT",
+                       first ? "NEW" : "KEEP", dF, target, dL, dR);
                 Motor_Stop();
                 osDelay(50);
-                rotate(90, emerg_turn_left);
+                rotate_to_side(emerg_turn_left);
                 state = SEEK;
-                break;
+            } break;
 
             case INTERSECT:
                 /* TODO: use canProgressDirection() to pick a turn. */
