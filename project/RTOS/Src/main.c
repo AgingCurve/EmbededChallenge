@@ -320,8 +320,20 @@ int main(void)
     GPIO_InitTypeDef GPIO_InitStruct;
 
     HAL_Init();
+
+    /* Marker A: HAL_Init OK */
+    BSP_LED_Init(LED1);
+    BSP_LED_Init(LED2);
+    BSP_LED_Init(LED3);
+    BSP_LED_Init(LED4);
+    BSP_LED_On(LED1);
+
     SystemClock_Config();
+    BSP_LED_On(LED2);                       /* Marker B: clock OK */
+
     BSP_COM1_Init();
+    printf("\r\n[BOOT A] HAL+CLK+UART OK\r\n");
+    HAL_Delay(200);
 
     /* -------- Motor PWM (TIM8 right, TIM4 left) -------- */
     uwPrescalerValue = (SystemCoreClock / 2) / 1000000;
@@ -359,6 +371,8 @@ int main(void)
     HAL_TIM_PWM_ConfigChannel(&TimHandle2, &sConfig2, TIM_CHANNEL_2);
 
     EXTILine_Config();
+    printf("[BOOT B] motor PWM + EXTI OK\r\n");
+    HAL_Delay(100);
 
     /* -------- Ultrasonic input capture (TIM3 CH2/3/4) -------- */
     uwPrescalerValue = ((SystemCoreClock / 2) / 1000000) - 1;
@@ -396,6 +410,8 @@ int main(void)
     sConfig3.Pulse      = TRIG_PULSE;
     HAL_TIM_PWM_ConfigChannel(&TimHandle4, &sConfig3, TIM_CHANNEL_1);
     HAL_TIM_PWM_Start(&TimHandle4, TIM_CHANNEL_1);
+    printf("[BOOT C] ultrasonic TIM3/TIM10 OK\r\n");
+    HAL_Delay(100);
 
     /* -------- IR ADC1/2/3 -------- */
     AdcHandle1.Instance                   = ADC3;
@@ -431,13 +447,9 @@ int main(void)
     adcConfig3 = adcConfig1;
     adcConfig3.Channel = ADC_CHANNEL_15;
     HAL_ADC_ConfigChannel(&AdcHandle3, &adcConfig3);
-
-    /* -------- Pre-scheduler sanity: UART + LED -------- */
-    BSP_LED_Init(LED1);
-    BSP_LED_Init(LED2);
-    BSP_LED_On(LED1);                        /* LED1 ON  -> reached pre-scheduler */
-    printf("\r\n[BOOT] pre-scheduler reached, UART OK\r\n");
-    HAL_Delay(500);
+    printf("[BOOT D] ADC1/2/3 OK\r\n");
+    BSP_LED_On(LED3);                        /* Marker E: all periph init done */
+    HAL_Delay(200);
 
     /* -------- RTOS tasks -------- */
     BaseType_t r1 = xTaskCreate(SensorTask,  "SensorTask",  TASK_STACK_WORDS, NULL, PRIO_SENSOR,  NULL);
