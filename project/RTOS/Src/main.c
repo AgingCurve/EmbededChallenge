@@ -45,9 +45,15 @@
 #define TURN_90_MS          500     /* legacy time-based rotate(), unused */
 
 /* Encoder-based rotation (used by EMERGENCY) */
-#define TICKS_PER_90        900     /* right-encoder ticks for 90° pivot — TUNE */
+#define TICKS_PER_90        900     /* right-encoder ticks for 90° (continuous, unused) */
 #define ROTATE_TIMEOUT_MS   4000    /* safety: bail if encoder stalls */
 #define POST_TURN_SETTLE_MS 300     /* let SensorTask median refresh after pivot */
+
+/* Iterative pivot (term_code style) — used by EMERGENCY */
+#define PIVOT_SUBSTEP_TICKS       30   /* encoder ticks per micro-pivot (~3°) */
+#define PIVOT_SUBSTEPS_90         30   /* number of micro-pivots for 90° */
+#define PIVOT_PAUSE_MS            10   /* brief stop between micro-pivots */
+#define PIVOT_SUBSTEP_TIMEOUT_MS  200  /* per-substep safety */
 
 /* HC-SR04 trigger */
 #define TRIG_PULSE        2
@@ -123,6 +129,7 @@ void    Motor_Stop(void);
 void    rotate(int degrees, bool left);
 void    rotate_to_side(bool left);
 void    rotate_ticks(int degrees, bool left);
+void    rotate_iterative(int degrees, bool left);
 void    switchTracking(void);
 void    angleAdjusting(void);
 int     angleCalculate(void);
@@ -266,6 +273,40 @@ void rotate(int degrees, bool left)
     else      Motor_Drive( V_TURN, -V_TURN);   /* pivot right (CW)  */
     osDelay(ms);
     Motor_Stop();
+}
+
+/* Iterative encoder-based pivot (term_code.c pattern).
+ *   N micro-pivots of M ticks each = `degrees` total.
+ *   Each micro-pivot: stop, reset encoder, drive until ticks reached, stop.
+ *   Uses the wheel that goes FORWARD for this pivot direction
+ *   (avoids quadrature sign issues; matches term_code's turnLeft/turnRight). */
+void rotate_iterative(int degrees, bool left)
+{
+    int substeps = (PIVOT_SUBSTEPS_90 * degrees) / 90;
+    if (substeps <= 0) return;
+
+    /* pivot LEFT  (CCW): right wheel forward -> use motorInterrupt1
+     * pivot RIGHT (CW):  left  wheel forward -> use motorInterrupt2 */
+    volatile uint16_t *enc = left ? &motorInterrupt1 : &motorInterrupt2;
+
+    int total_ms = 0;
+    for (int i = 0; i < substeps; i++) {
+        Motor_Stop();
+        osDelay(PIVOT_PAUSE_MS);
+        *enc = 1;
+        if (left) Motor_Drive(-V_TURN,  V_TURN);
+        else      Motor_Drive( V_TURN, -V_TURN);
+        int t = 0;
+        while (*enc < PIVOT_SUBSTEP_TICKS && t < PIVOT_SUBSTEP_TIMEOUT_MS) {
+            osDelay(1);
+            t++;
+        }
+        Motor_Stop();
+        total_ms += t + PIVOT_PAUSE_MS;
+    }
+    printf("\r\n>> ROT-ITER %s deg=%d substeps=%d ms=%d",
+           left ? "L" : "R", degrees, substeps, total_ms);
+    osDelay(POST_TURN_SETTLE_MS);
 }
 
 /* Encoder-driven pivot: snapshots right encoder, drives until |Δticks| >= target.
@@ -423,7 +464,7 @@ void ControlTask(void *arg)
                        first ? "NEW" : "KEEP", dF, dL, dR);
                 Motor_Stop();
                 osDelay(50);
-                rotate_ticks(90, emerg_turn_left);   /* encoder-based, with settle */
+                rotate_iterative(90, emerg_turn_left);   /* term_code pattern, with settle */
                 state = SEEK;
             } break;
 
