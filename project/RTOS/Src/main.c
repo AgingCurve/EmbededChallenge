@@ -97,7 +97,8 @@ void    ControlTask(void *arg);
 #endif
 PUTCHAR_PROTOTYPE
 {
-    HAL_UART_Transmit(&UartHandle1, (uint8_t *)&ch, 1, 0xFFFF);
+    /* 1ms timeout: if UART isn't wired up, printf returns instead of hanging boot */
+    HAL_UART_Transmit(&UartHandle1, (uint8_t *)&ch, 1, 1);
     return ch;
 }
 
