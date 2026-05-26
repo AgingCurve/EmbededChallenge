@@ -424,26 +424,56 @@ int main(void)
     adcConfig1.Offset       = 0;
     HAL_ADC_ConfigChannel(&AdcHandle1, &adcConfig1);
 
-    AdcHandle2 = AdcHandle1;
-    AdcHandle2.Instance = ADC2;
+    AdcHandle2.Instance                   = ADC2;
+    AdcHandle2.Init.ClockPrescaler        = ADC_CLOCKPRESCALER_PCLK_DIV2;
+    AdcHandle2.Init.Resolution            = ADC_RESOLUTION12b;
+    AdcHandle2.Init.ScanConvMode          = DISABLE;
+    AdcHandle2.Init.ContinuousConvMode    = DISABLE;
+    AdcHandle2.Init.DiscontinuousConvMode = DISABLE;
+    AdcHandle2.Init.NbrOfDiscConversion   = 0;
+    AdcHandle2.Init.ExternalTrigConvEdge  = ADC_EXTERNALTRIGCONVEDGE_NONE;
+    AdcHandle2.Init.ExternalTrigConv      = ADC_EXTERNALTRIGCONV_T1_CC1;
+    AdcHandle2.Init.DataAlign             = ADC_DATAALIGN_RIGHT;
+    AdcHandle2.Init.NbrOfConversion       = 1;
+    AdcHandle2.Init.DMAContinuousRequests = DISABLE;
+    AdcHandle2.Init.EOCSelection          = DISABLE;
     HAL_ADC_Init(&AdcHandle2);
-    adcConfig2 = adcConfig1;
-    adcConfig2.Channel = ADC_CHANNEL_14;
+    adcConfig2.Channel      = ADC_CHANNEL_14;
+    adcConfig2.Rank         = 1;
+    adcConfig2.SamplingTime = ADC_SAMPLETIME_480CYCLES;
+    adcConfig2.Offset       = 0;
     HAL_ADC_ConfigChannel(&AdcHandle2, &adcConfig2);
 
-    AdcHandle3 = AdcHandle1;
-    AdcHandle3.Instance = ADC1;
+    AdcHandle3.Instance                   = ADC1;
+    AdcHandle3.Init.ClockPrescaler        = ADC_CLOCKPRESCALER_PCLK_DIV2;
+    AdcHandle3.Init.Resolution            = ADC_RESOLUTION12b;
+    AdcHandle3.Init.ScanConvMode          = DISABLE;
+    AdcHandle3.Init.ContinuousConvMode    = DISABLE;
+    AdcHandle3.Init.DiscontinuousConvMode = DISABLE;
+    AdcHandle3.Init.NbrOfDiscConversion   = 0;
+    AdcHandle3.Init.ExternalTrigConvEdge  = ADC_EXTERNALTRIGCONVEDGE_NONE;
+    AdcHandle3.Init.ExternalTrigConv      = ADC_EXTERNALTRIGCONV_T1_CC1;
+    AdcHandle3.Init.DataAlign             = ADC_DATAALIGN_RIGHT;
+    AdcHandle3.Init.NbrOfConversion       = 1;
+    AdcHandle3.Init.DMAContinuousRequests = DISABLE;
+    AdcHandle3.Init.EOCSelection          = DISABLE;
     HAL_ADC_Init(&AdcHandle3);
-    adcConfig3 = adcConfig1;
-    adcConfig3.Channel = ADC_CHANNEL_15;
+    adcConfig3.Channel      = ADC_CHANNEL_15;
+    adcConfig3.Rank         = 1;
+    adcConfig3.SamplingTime = ADC_SAMPLETIME_480CYCLES;
+    adcConfig3.Offset       = 0;
     HAL_ADC_ConfigChannel(&AdcHandle3, &adcConfig3);
 
     /* -------- RTOS tasks (sizes match main_good) -------- */
+    BSP_LED_Init(LED2);
+    BSP_LED_On(LED1);                /* solid ON pre-scheduler -> blinking = ControlTask alive */
     xTaskCreate(SensorTask,  "sensor",   512, NULL, 3, NULL);
     xTaskCreate(IR_Task,     "ir",       512, NULL, 3, NULL);
     xTaskCreate(ControlTask, "control", 1024, NULL, 2, NULL);
     vTaskStartScheduler();
 
+    /* Only reached if scheduler failed -> LED2 solid ON as fault marker */
+    BSP_LED_On(LED2);
     while (1) { }
 }
 
