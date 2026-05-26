@@ -42,6 +42,7 @@
 #define PWM_PERIOD        20000
 #define V_CRUISE          20000    /* duty for SEEK forward drive */
 #define V_TURN            18000    /* duty for in-place pivot (each wheel) */
+#define TURN_90_MS        500      /* ms to pivot 90° at V_TURN — calibrate! */
 
 /* HC-SR04 trigger */
 #define TRIG_PULSE        2
@@ -108,6 +109,7 @@ void IR_Task(void *arg);
 /* Control */
 void    Motor_Drive(int v_left, int v_right);
 void    Motor_Stop(void);
+void    rotate(int degrees, bool left);
 void    switchTracking(void);
 void    angleAdjusting(void);
 int     angleCalculate(void);
@@ -240,6 +242,19 @@ void Motor_Stop(void)
     Motor_Drive(0, 0);
 }
 
+/* Blocking in-place pivot by `degrees` toward `left` (true=CCW, false=CW).
+ * Uses TURN_90_MS calibration; scales linearly for other angles.
+ * Blocks ControlTask for ~(TURN_90_MS * degrees / 90) ms. */
+void rotate(int degrees, bool left)
+{
+    int ms = (TURN_90_MS * degrees) / 90;
+    if (ms <= 0) return;
+    if (left) Motor_Drive(-V_TURN,  V_TURN);   /* pivot left  (CCW) */
+    else      Motor_Drive( V_TURN, -V_TURN);   /* pivot right (CW)  */
+    osDelay(ms);
+    Motor_Stop();
+}
+
 /* ===========================================================================
  *  Control Layer — helpers
  * =========================================================================== */
@@ -324,12 +339,12 @@ void ControlTask(void *arg)
                 break;
 
             case EMERGENCY:
-                /* Front blocked: pivot in place toward the more open side.
-                 * dL >= dR -> left is more open -> pivot left  (CCW: -L, +R)
-                 * dL <  dR -> right is more open -> pivot right (CW : +L, -R) */
-                if (dL >= dR) Motor_Drive(-V_TURN,  V_TURN);
-                else          Motor_Drive( V_TURN, -V_TURN);
-                if (emergencyResolved()) state = SEEK;
+                /* Front blocked: pivot 90° toward the more open side, then re-evaluate.
+                 * Blocking; ControlTask pauses ~TURN_90_MS while turning. */
+                Motor_Stop();
+                osDelay(50);                  /* settle before pivot */
+                rotate(90, dL >= dR);         /* dL>=dR -> pivot left */
+                state = SEEK;
                 break;
 
             case INTERSECT:
