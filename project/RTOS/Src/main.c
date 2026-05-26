@@ -452,13 +452,10 @@ int main(void)
     HAL_Delay(200);
 
     /* -------- RTOS tasks -------- */
-    BaseType_t r1 = xTaskCreate(SensorTask,  "SensorTask",  TASK_STACK_WORDS, NULL, PRIO_SENSOR,  NULL);
-    BaseType_t r2 = xTaskCreate(IR_Task,     "IR_Task",     TASK_STACK_WORDS, NULL, PRIO_IR,      NULL);
-    BaseType_t r3 = xTaskCreate(ControlTask, "ControlTask", TASK_STACK_WORDS, NULL, PRIO_CONTROL, NULL);
-    printf("[BOOT] xTaskCreate r1=%ld r2=%ld r3=%ld (1=OK)\r\n", (long)r1, (long)r2, (long)r3);
-    HAL_Delay(500);
-
-    printf("[BOOT] starting scheduler...\r\n");
+    xTaskCreate(SensorTask,  "SensorTask",  TASK_STACK_WORDS, NULL, PRIO_SENSOR,  NULL);
+    xTaskCreate(IR_Task,     "IR_Task",     TASK_STACK_WORDS, NULL, PRIO_IR,      NULL);
+    xTaskCreate(ControlTask, "ControlTask", TASK_STACK_WORDS, NULL, PRIO_CONTROL, NULL);
+    printf("[BOOT E] xTaskCreate done, starting scheduler...\r\n");
     HAL_Delay(100);
     vTaskStartScheduler();
 
