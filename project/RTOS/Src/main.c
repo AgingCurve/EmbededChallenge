@@ -39,10 +39,15 @@
 #define EMG_FRONT_HYST    2        /* +cm margin to clear EMERGENCY */
 
 /* Motor PWM */
-#define PWM_PERIOD        20000
-#define V_CRUISE          20000    /* duty for SEEK forward drive */
-#define V_TURN            18000    /* duty for in-place pivot (each wheel) */
-#define TURN_90_MS        500      /* ms to pivot 90° at V_TURN — calibrate! */
+#define PWM_PERIOD          20000
+#define V_CRUISE            20000   /* duty for SEEK forward drive */
+#define V_TURN              20000   /* full duty for max pivot torque */
+#define TURN_90_MS          500     /* legacy time-based rotate(), unused */
+
+/* Encoder-based rotation (used by EMERGENCY) */
+#define TICKS_PER_90        900     /* right-encoder ticks for 90° pivot — TUNE */
+#define ROTATE_TIMEOUT_MS   4000    /* safety: bail if encoder stalls */
+#define POST_TURN_SETTLE_MS 300     /* let SensorTask median refresh after pivot */
 
 /* HC-SR04 trigger */
 #define TRIG_PULSE        2
@@ -117,6 +122,7 @@ void    Motor_Drive(int v_left, int v_right);
 void    Motor_Stop(void);
 void    rotate(int degrees, bool left);
 void    rotate_to_side(bool left);
+void    rotate_ticks(int degrees, bool left);
 void    switchTracking(void);
 void    angleAdjusting(void);
 int     angleCalculate(void);
@@ -262,6 +268,38 @@ void rotate(int degrees, bool left)
     Motor_Stop();
 }
 
+/* Encoder-driven pivot: snapshots right encoder, drives until |Δticks| >= target.
+ * Includes safety timeout and post-rotation settle so the median filter
+ * reflects the new orientation before SEEK takes over. */
+void rotate_ticks(int degrees, bool left)
+{
+    int target = (TICKS_PER_90 * degrees) / 90;
+    if (target <= 0) return;
+
+    int start = (int)motorInterrupt1;
+    int elapsed = 0;
+    int diff = 0;
+
+    if (left) Motor_Drive(-V_TURN,  V_TURN);
+    else      Motor_Drive( V_TURN, -V_TURN);
+
+    while (elapsed < ROTATE_TIMEOUT_MS) {
+        osDelay(10);
+        elapsed += 10;
+        diff = (int)motorInterrupt1 - start;
+        if (diff < 0) diff = -diff;
+        if (diff >= target) break;
+    }
+    Motor_Stop();
+    printf("\r\n>> ROT %s deg=%d ticks=%d/%d ms=%d",
+           left ? "L" : "R", degrees, diff, target, elapsed);
+
+    /* Settle: hold still while median filter (~7 samples) refreshes
+     * with the post-rotation orientation. Critical to avoid charging
+     * forward on stale dF reading. */
+    osDelay(POST_TURN_SETTLE_MS);
+}
+
 /* Sensor-driven 90° pivot — no time calibration needed.
  * Snapshots the side distance, then rotates until front reads near that value.
  * `min_ms` avoids premature exit on transient dF readings.
@@ -380,13 +418,12 @@ void ControlTask(void *arg)
                     emerg_committed = true;
                 }
                 seek_clear_ticks = 0;
-                int target = emerg_turn_left ? dR : dL;
-                printf("\r\n>> EMERG turn=%s commit=%s dF=%d->%d dL=%d dR=%d",
+                printf("\r\n>> EMERG %s commit=%s dF=%d dL=%d dR=%d",
                        emerg_turn_left ? "LEFT" : "RIGHT",
-                       first ? "NEW" : "KEEP", dF, target, dL, dR);
+                       first ? "NEW" : "KEEP", dF, dL, dR);
                 Motor_Stop();
                 osDelay(50);
-                rotate_to_side(emerg_turn_left);
+                rotate_ticks(90, emerg_turn_left);   /* encoder-based, with settle */
                 state = SEEK;
             } break;
 
