@@ -73,8 +73,8 @@ static void Error_Handler(void);
 /* Sensing */
 int  median7(int *a);
 int  stddev7(int *a);
-void SensorTask(void const *arg);
-void IR_Task(void const *arg);
+void SensorTask(void *arg);
+void IR_Task(void *arg);
 
 /* Control */
 void    Motor_Drive(int v_left, int v_right);
@@ -85,7 +85,7 @@ int     angleCalculate(void);
 uint8_t canProgressDirection(void);
 bool    isEmergency(void);
 bool    emergencyResolved(void);
-void    ControlTask(void const *arg);
+void    ControlTask(void *arg);
 
 /* ===========================================================================
  *  printf -> UART
@@ -134,7 +134,7 @@ int stddev7(int *a)
     return s;
 }
 
-void SensorTask(void const *arg)
+void SensorTask(void *arg)
 {
     (void)arg;
     osDelay(TASK_WARMUP_MS);
@@ -159,7 +159,7 @@ void SensorTask(void const *arg)
 /* ===========================================================================
  *  Sensing Layer — IR_Task
  * =========================================================================== */
-void IR_Task(void const *arg)
+void IR_Task(void *arg)
 {
     (void)arg;
     osDelay(TASK_WARMUP_MS);
@@ -254,7 +254,7 @@ bool emergencyResolved(void)
 /* ===========================================================================
  *  Control Layer — FSM
  * =========================================================================== */
-void ControlTask(void const *arg)
+void ControlTask(void *arg)
 {
     (void)arg;
     static const char *state_name[] = {
@@ -433,9 +433,9 @@ int main(void)
     HAL_ADC_ConfigChannel(&AdcHandle3, &adcConfig3);
 
     /* -------- RTOS tasks -------- */
-    xTaskCreate((TaskFunction_t)SensorTask,  "SensorTask",  TASK_STACK_WORDS, NULL, PRIO_SENSOR,  NULL);
-    xTaskCreate((TaskFunction_t)IR_Task,     "IR_Task",     TASK_STACK_WORDS, NULL, PRIO_IR,      NULL);
-    xTaskCreate((TaskFunction_t)ControlTask, "ControlTask", TASK_STACK_WORDS, NULL, PRIO_CONTROL, NULL);
+    xTaskCreate(SensorTask,  "SensorTask",  TASK_STACK_WORDS, NULL, PRIO_SENSOR,  NULL);
+    xTaskCreate(IR_Task,     "IR_Task",     TASK_STACK_WORDS, NULL, PRIO_IR,      NULL);
+    xTaskCreate(ControlTask, "ControlTask", TASK_STACK_WORDS, NULL, PRIO_CONTROL, NULL);
     vTaskStartScheduler();
 
     while (1) { }
