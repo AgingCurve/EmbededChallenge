@@ -38,10 +38,10 @@
 #define D_TARGET          8        /* wall-follow target distance */
 #define D_MIN             4        /* lower safety bound          */
 #define D_OPEN            150      /* > D_OPEN => "no wall on this side" */
-#define EMG_FRONT         6        /* emergency front threshold (cm) */
+#define EMG_FRONT         8        /* emergency front threshold (cm) */
 #define EMG_FRONT_HYST    2        /* +cm margin to clear EMERGENCY */
-#define IR_BUMPER_THRESH  2200     /* raw ADC; ir_left/right ABOVE this => bumper triggered. */
-#define EMERG_IR_DEG      45       /* rotation angle when IR bumper triggers EMERGENCY */
+#define IR_BUMPER_THRESH  2100     /* raw ADC; ir_left/right ABOVE this => bumper triggered. */
+#define EMERG_IR_DEG      30       /* rotation angle when IR bumper triggers EMERGENCY */
 #define EMERG_US_DEG      90       /* rotation angle when front ultrasonic triggers EMERGENCY */
 
 /* Motor PWM */
@@ -74,14 +74,16 @@
 
 /* ALIGN_PROGRESS side-wall avoidance: when a side reads < D_MIN cm, stop and
  * pivot away by this many degrees (replaces the previous half-speed veer-off). */
-#define ROTATE_VEER_DEG   20
+#define ROTATE_VEER_DEG   10
 
 /* After a small pivot (VEER or IR-triggered EMERGENCY), drive forward this
  * long so the next FSM tick isn't stuck in the same trigger zone -- in-place
  * pivots don't change position, so the trigger condition recurs without a
- * forward step. Large enough to clear sensor range, small enough to avoid
- * blowing past a new obstacle. */
-#define ESCAPE_FORWARD_MS 250
+ * forward step. Split per trigger because their geometry differs:
+ *   - VEER fires on side ultrasonic (further from front), needs longer escape
+ *   - IR fires near the front corners, shorter forward step is enough        */
+#define ESCAPE_FORWARD_MS_VEER 700
+#define ESCAPE_FORWARD_MS_IR   500
 
 /* Pivot calibration mode — when 1, ControlTask skips the FSM and runs a
  * 4x90° round-trip (right then left) so PIVOT_SUBSTEPS_90 can be measured
@@ -702,14 +704,14 @@ void ControlTask(void *arg)
                     osDelay(50);
                     rotate_iterative(ROTATE_VEER_DEG, true);   /* R wall close -> pivot LEFT */
                     Motor_Drive(V_CRUISE, V_CRUISE);
-                    osDelay(ESCAPE_FORWARD_MS);
+                    osDelay(ESCAPE_FORWARD_MS_VEER);
                 } else if (dL > 0 && dL < D_MIN) {
                     printf("\r\n>> VEER R deg=%d dL=%d", ROTATE_VEER_DEG, dL);
                     Motor_Stop();
                     osDelay(50);
                     rotate_iterative(ROTATE_VEER_DEG, false);  /* L wall close -> pivot RIGHT */
                     Motor_Drive(V_CRUISE, V_CRUISE);
-                    osDelay(ESCAPE_FORWARD_MS);
+                    osDelay(ESCAPE_FORWARD_MS_VEER);
                 } else {
                     Motor_Drive(V_CRUISE, V_CRUISE);
                 }
@@ -761,7 +763,7 @@ void ControlTask(void *arg)
                  * forward escape to break the loop. US (90°) doesn't need it. */
                 if (emerg_turn_deg == EMERG_IR_DEG) {
                     Motor_Drive(V_CRUISE, V_CRUISE);
-                    osDelay(ESCAPE_FORWARD_MS);
+                    osDelay(ESCAPE_FORWARD_MS_IR);
                 }
                 state = SEEK;
             } break;
