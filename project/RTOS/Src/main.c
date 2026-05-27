@@ -86,6 +86,7 @@
  *   - IR fires near the front corners, shorter forward step is enough        */
 #define ESCAPE_FORWARD_MS_VEER 700
 #define ESCAPE_FORWARD_MS_IR   500
+#define VEER_COOLDOWN_TICKS    50   /* 50 * CTRL_PERIOD_MS = 1s lockout after each VEER */
 
 /* Pivot calibration mode — when 1, ControlTask skips the FSM and runs a
  * 4x90° round-trip (right then left) so PIVOT_SUBSTEPS_90 can be measured
@@ -153,6 +154,7 @@ static bool emerg_committed = false;
 static bool emerg_turn_left = false;
 static int  emerg_turn_deg  = EMERG_US_DEG;   /* committed rotation magnitude */
 static int  seek_clear_ticks = 0;
+static int  veer_cooldown_ticks = 0;   /* ALIGN_PROGRESS VEER lockout counter */
 #define EMERG_RELEASE_TICKS  25     /* ~500ms of clear SEEK -> release commit */
 
 /* ===========================================================================
@@ -697,27 +699,31 @@ void ControlTask(void *arg)
                     break;
                 }
 
-                /* VEER disabled — grid-based course + V_TRIM_L straight drive is
-                 * accurate enough that side-wall pivots aren't needed. Keep the
-                 * block as reference for re-enabling on noisier courses.
-                 *
-                 * if (dR > 0 && dR < D_MIN) {
-                 *     printf("\r\n>> VEER L deg=%d dR=%d", ROTATE_VEER_DEG, dR);
-                 *     Motor_Stop();
-                 *     osDelay(50);
-                 *     rotate_iterative(ROTATE_VEER_DEG, true);
-                 *     Motor_Drive(V_CRUISE + V_TRIM_L, V_CRUISE);
-                 *     osDelay(ESCAPE_FORWARD_MS_VEER);
-                 * } else if (dL > 0 && dL < D_MIN) {
-                 *     printf("\r\n>> VEER R deg=%d dL=%d", ROTATE_VEER_DEG, dL);
-                 *     Motor_Stop();
-                 *     osDelay(50);
-                 *     rotate_iterative(ROTATE_VEER_DEG, false);
-                 *     Motor_Drive(V_CRUISE + V_TRIM_L, V_CRUISE);
-                 *     osDelay(ESCAPE_FORWARD_MS_VEER);
-                 * }
-                 */
-                Motor_Drive(V_CRUISE + V_TRIM_L, V_CRUISE);
+                /* Side-wall avoidance: stop, pivot away, then drive forward briefly so
+                 * the next tick isn't stuck in the same trigger zone. After firing,
+                 * VEER is locked out for VEER_COOLDOWN_TICKS ticks so consecutive
+                 * triggers don't whip the robot back and forth. */
+                if (veer_cooldown_ticks > 0) veer_cooldown_ticks--;
+
+                if (veer_cooldown_ticks == 0 && dR > 0 && dR < D_MIN) {
+                    printf("\r\n>> VEER L deg=%d dR=%d", ROTATE_VEER_DEG, dR);
+                    Motor_Stop();
+                    osDelay(50);
+                    rotate_iterative(ROTATE_VEER_DEG, true);   /* R wall close -> pivot LEFT */
+                    Motor_Drive(V_CRUISE + V_TRIM_L, V_CRUISE);
+                    osDelay(ESCAPE_FORWARD_MS_VEER);
+                    veer_cooldown_ticks = VEER_COOLDOWN_TICKS;
+                } else if (veer_cooldown_ticks == 0 && dL > 0 && dL < D_MIN) {
+                    printf("\r\n>> VEER R deg=%d dL=%d", ROTATE_VEER_DEG, dL);
+                    Motor_Stop();
+                    osDelay(50);
+                    rotate_iterative(ROTATE_VEER_DEG, false);  /* L wall close -> pivot RIGHT */
+                    Motor_Drive(V_CRUISE + V_TRIM_L, V_CRUISE);
+                    osDelay(ESCAPE_FORWARD_MS_VEER);
+                    veer_cooldown_ticks = VEER_COOLDOWN_TICKS;
+                } else {
+                    Motor_Drive(V_CRUISE + V_TRIM_L, V_CRUISE);
+                }
 
                 if (++seek_clear_ticks >= EMERG_RELEASE_TICKS) emerg_committed = false;
             } break;

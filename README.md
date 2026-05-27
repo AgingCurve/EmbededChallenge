@@ -109,6 +109,7 @@ typedef enum { TRACK_LEFT = 0, TRACK_RIGHT } TrackingSide;
 | `ROTATE_VEER_DEG` | 10 | ALIGN_PROGRESS 측면 회피용 회전 각도 (`dR<D_MIN` 또는 `dL<D_MIN` 시) |
 | `ESCAPE_FORWARD_MS_VEER` | 700 | VEER 회전 후 강제 직진 시간 (측면 ultrasonic 트리거; 더 멀리 빠져나가야 함) |
 | `ESCAPE_FORWARD_MS_IR` | 500 | IR-triggered EMERGENCY 회전 후 강제 직진 시간 (전방 코너 근접) |
+| `VEER_COOLDOWN_TICKS` | 50 | VEER 발동 후 잠금 ticks (50 × 20ms = 1초). 도리도리 방지 |
 
 ### Motor PWM
 | 상수 | 값 | 의미 |
