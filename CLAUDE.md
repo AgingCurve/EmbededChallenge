@@ -94,7 +94,7 @@ ControlTask 는 300 ms warm-up 후 시작 (Sensor/IR 은 200 ms).
 
 - **공유 타입** (FSM enum, `DIR_*`, `READY`): `project/RTOS/Inc/main.h`
 - **튜닝 상수 전부** (`D_TARGET`, `EMG_FRONT`, `PIVOT_*`, `ANGLE_*`, PWM duty …): `project/RTOS/Src/main.c` 상단 *Calibration / tunables* 블록
-- **캘리브 모드**: `CALIB_PIVOT` 매크로 (0/1) — 1이면 ControlTask 가 FSM 대신 4×90° 회전 시퀀스만 돌리고 정지. 일반 주행 시엔 반드시 0.
+- **캘리브 모드**: `CALIB_PIVOT` (0/1) — FSM 대신 4×90° 회전 시퀀스 후 정지. / `CALIB_IR` (0/1) — 모터 정지, 100ms 마다 IR raw ADC printf. 둘 다 일반 주행 시엔 0.
 
 상수를 추가하거나 의미를 바꾸면 **README의 상수 표도 같이 업데이트**해야 합니다. 둘이 어긋나면 사람이 헷갈립니다.
 

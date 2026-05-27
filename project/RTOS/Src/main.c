@@ -69,10 +69,19 @@
 /* ADC */
 #define ADC_POLL_TIMEOUT  0xFF
 
+/* ALIGN_PROGRESS side-wall avoidance: when a side reads < D_MIN cm, stop and
+ * pivot away by this many degrees (replaces the previous half-speed veer-off). */
+#define ROTATE_VEER_DEG   30
+
 /* Pivot calibration mode — when 1, ControlTask skips the FSM and runs a
  * 4x90° round-trip (right then left) so PIVOT_SUBSTEPS_90 can be measured
  * against floor markings. Set to 0 for normal driving. */
 #define CALIB_PIVOT       0
+
+/* IR calibration mode — when 1, ControlTask skips the FSM, motors stay
+ * stopped, and IR readings stream to UART at 100ms cadence so a human
+ * can wave obstacles in front of each sensor to find IR_BUMPER_THRESH. */
+#define CALIB_IR          0
 
 /* ===========================================================================
  *  Peripherals
@@ -626,6 +635,18 @@ void ControlTask(void *arg)
     for (;;) osDelay(1000);   /* trap — flip CALIB_PIVOT to 0 and reflash */
 #endif
 
+#if CALIB_IR
+    /* Motors off, stream IR readings to UART at 10 Hz.
+     * Move obstacles past each sensor and note the ADC at "this is too close".
+     * That value -> set IR_BUMPER_THRESH (when re-enabling IR bumper logic). */
+    Motor_Stop();
+    printf("\r\n>> CALIB IR START");
+    for (;;) {
+        printf("\r\n>> IR L=%d R=%d F=%d", ir_left, ir_right, ir_floor);
+        osDelay(100);
+    }
+#endif
+
     for (;;) {
         /* Top-level guard: any state can be preempted by EMERGENCY. */
         if (isEmergency()) state = EMERGENCY;
@@ -656,13 +677,20 @@ void ControlTask(void *arg)
                     break;
                 }
 
-                /* arctan correction disabled — falling back to pure distance-based
-                 * veer-off until the angle calculation is rethought. Slow the
-                 * FAR-side wheel so the robot pivots AWAY from the near wall. */
-                int vL = V_CRUISE, vR = V_CRUISE;
-                if (dR > 0 && dR < D_MIN) vL = V_CRUISE / 2;   /* R wall close -> slow L -> veer LEFT */
-                if (dL > 0 && dL < D_MIN) vR = V_CRUISE / 2;   /* L wall close -> slow R -> veer RIGHT */
-                Motor_Drive(vL, vR);
+                /* Side-wall avoidance: stop and pivot away decisively (no smooth veer). */
+                if (dR > 0 && dR < D_MIN) {
+                    printf("\r\n>> VEER L deg=%d dR=%d", ROTATE_VEER_DEG, dR);
+                    Motor_Stop();
+                    osDelay(50);
+                    rotate_iterative(ROTATE_VEER_DEG, true);   /* R wall close -> pivot LEFT */
+                } else if (dL > 0 && dL < D_MIN) {
+                    printf("\r\n>> VEER R deg=%d dL=%d", ROTATE_VEER_DEG, dL);
+                    Motor_Stop();
+                    osDelay(50);
+                    rotate_iterative(ROTATE_VEER_DEG, false);  /* L wall close -> pivot RIGHT */
+                } else {
+                    Motor_Drive(V_CRUISE, V_CRUISE);
+                }
 
                 if (++seek_clear_ticks >= EMERG_RELEASE_TICKS) emerg_committed = false;
             } break;
