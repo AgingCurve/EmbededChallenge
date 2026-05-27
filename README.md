@@ -108,8 +108,7 @@ typedef enum { TRACK_LEFT = 0, TRACK_RIGHT } TrackingSide;
 | 상수 | 값 | 의미 |
 |---|---|---|
 | `PWM_PERIOD` | 20000 | TIM4/TIM8 Auto-Reload (= 100% duty) |
-| `V_CRUISE` | 15000 | ALIGN/NON_ALIGN 직진 듀티 |
-| `V_SEEK` | 10000 | SEEK 직진 듀티 |
+| `V_CRUISE` | 15000 | 모든 직진 듀티 (SEEK/ALIGN/NON_ALIGN 공통) |
 | `V_TURN` | 20000 | 피벗 회전 듀티 (full torque) |
 
 ### Iterative Pivot (회전 캘리브)

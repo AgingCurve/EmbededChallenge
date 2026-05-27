@@ -43,8 +43,7 @@
 
 /* Motor PWM */
 #define PWM_PERIOD          20000
-#define V_CRUISE            15000   /* duty for CRUISE(ALIGN, NONALIGN) forward drive */
-#define V_SEEK              10000   /* duty for SEEK forward drive*/
+#define V_CRUISE            15000   /* duty for all forward drive (SEEK / ALIGN / NON_ALIGN) */
 #define V_TURN              20000   /* full duty for max pivot torque */
 
 /* Iterative pivot — the only rotation primitive.
