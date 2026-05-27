@@ -40,9 +40,7 @@
 #define D_OPEN            150       /* > D_OPEN => "no wall on this side" */
 #define EMG_FRONT         9        /* emergency front threshold (cm) */
 #define EMG_FRONT_HYST    2        /* +cm margin to clear EMERGENCY */
-#define IR_BUMPER_THRESH  150      /* raw ADC; ir_left/right BELOW this => bumper triggered.
-                                    * Sensor is inverse (closer = lower ADC). Baseline far ~200-400,
-                                    * close-contact drops to 30-100. */
+#define IR_BUMPER_THRESH  1000     /* raw ADC; ir_left/right ABOVE this => bumper triggered. */
 #define EMERG_IR_DEG      30       /* rotation angle when IR bumper triggers EMERGENCY (small nudge) */
 #define EMERG_US_DEG      90       /* rotation angle when front ultrasonic triggers EMERGENCY (full pivot) */
 
@@ -433,6 +431,10 @@ void Motor_Stop(void)
  */
 void rotate_iterative(int degrees, bool left)
 {
+    /* Hardware wiring inverts our software convention -- callers say "left"
+     * but the original wheel mapping rotates the opposite way. Flip here so
+     * every call site (VEER, EMERGENCY, CALIB_PIVOT) is corrected in one place. */
+    left = !left;
     int subs90 = left ? PIVOT_SUBSTEPS_90_L : PIVOT_SUBSTEPS_90_R;
     int substeps = (subs90 * degrees) / 90;
     if (substeps <= 0) return;
@@ -601,8 +603,8 @@ uint8_t canProgressDirection(void)
 bool isEmergency(void)
 {
     return (dF > 0 && dF <= EMG_FRONT) ||
-           (ir_left  > 0 && ir_left  < IR_BUMPER_THRESH) ||
-           (ir_right > 0 && ir_right < IR_BUMPER_THRESH);
+           (ir_left  > IR_BUMPER_THRESH) ||
+           (ir_right > IR_BUMPER_THRESH);
 }
 
 /**
@@ -740,16 +742,14 @@ void ControlTask(void *arg)
                  * Commit on first entry; reuse until SEEK clears. */
                 bool first = !emerg_committed;
                 if (first) {
-                    bool ir_l_hit = (ir_left  > 0 && ir_left  < IR_BUMPER_THRESH);
-                    bool ir_r_hit = (ir_right > 0 && ir_right < IR_BUMPER_THRESH);
+                    bool ir_l_hit = (ir_left  > IR_BUMPER_THRESH);
+                    bool ir_r_hit = (ir_right > IR_BUMPER_THRESH);
 
                     if (ir_l_hit || ir_r_hit) {
-                        /* IR bumper: flipped from naive "away" -- empirically the
-                         * robot was rotating toward the obstacle, so invert. */
                         emerg_turn_deg = EMERG_IR_DEG;
-                        if (ir_l_hit && ir_r_hit) emerg_turn_left = (ir_right > ir_left);
-                        else if (ir_l_hit)        emerg_turn_left = true;
-                        else                      emerg_turn_left = false;
+                        if (ir_l_hit && ir_r_hit) emerg_turn_left = (ir_right > ir_left);  /* away from higher (closer) */
+                        else if (ir_l_hit)        emerg_turn_left = false;                  /* left bumper  -> turn RIGHT */
+                        else                      emerg_turn_left = true;                   /* right bumper -> turn LEFT  */
                     } else {
                         /* Front ultrasonic wall: full 90° pivot to follow new corridor. */
                         emerg_turn_deg = EMERG_US_DEG;
