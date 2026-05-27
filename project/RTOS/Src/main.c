@@ -661,6 +661,14 @@ void ControlTask(void *arg)
                 /* arctan-based event-driven correction (see angleAdjusting). */
                 angleAdjusting();
 
+                /* Distance safety net (mirrors SEEK's veer-off). arctan only
+                 * fires when the front wall is changing; without this, a long
+                 * straight corridor lets the robot drift into the side wall. */
+                int vL = V_CRUISE, vR = V_CRUISE;
+                if (dR > 0 && dR < D_MIN) vR = V_CRUISE / 2;
+                if (dL > 0 && dL < D_MIN) vL = V_CRUISE / 2;
+                Motor_Drive(vL, vR);
+
                 if (++seek_clear_ticks >= EMERG_RELEASE_TICKS) emerg_committed = false;
             } break;
 
