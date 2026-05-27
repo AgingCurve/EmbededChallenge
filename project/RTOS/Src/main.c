@@ -16,6 +16,7 @@
 #include "main.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include "cmsis_os.h"
 
 /* ===========================================================================
@@ -33,27 +34,31 @@
 #define CTRL_WARMUP_MS    300
 
 /* Distance thresholds (cm) */
-#define D_TARGET          15       /* wall-follow target distance */
-#define D_MIN             8        /* lower safety bound          */
-#define EMG_FRONT         20        /* emergency front threshold   */
+#define D_TARGET          20       /* wall-follow target distance */
+#define D_MIN             10        /* lower safety bound          */
+#define D_OPEN            150       /* > D_OPEN => "no wall on this side" */
+#define EMG_FRONT         20       /* emergency front threshold   */
 #define EMG_FRONT_HYST    2        /* +cm margin to clear EMERGENCY */
 
 /* Motor PWM */
 #define PWM_PERIOD          20000
-#define V_CRUISE            20000   /* duty for SEEK forward drive */
+#define V_CRUISE            15000   /* duty for CRUISE(ALIGN, NONALIGN) forward drive */
+#define V_SEEK              10000   /* duty for SEEK forward drive*/
 #define V_TURN              20000   /* full duty for max pivot torque */
-#define TURN_90_MS          500     /* legacy time-based rotate(), unused */
 
-/* Encoder-based rotation (used by EMERGENCY) */
-#define TICKS_PER_90        900     /* right-encoder ticks for 90° (continuous, unused) */
-#define ROTATE_TIMEOUT_MS   4000    /* safety: bail if encoder stalls */
-#define POST_TURN_SETTLE_MS 300     /* let SensorTask median refresh after pivot */
-
-/* Iterative pivot (term_code style) — used by EMERGENCY */
+/* Iterative pivot — the only rotation primitive.
+ * 90° = PIVOT_SUBSTEPS_90 × PIVOT_SUBSTEP_TICKS encoder ticks total.
+ * Tune PIVOT_SUBSTEPS_90 against measured rotation; keep tick count fixed. */
 #define PIVOT_SUBSTEP_TICKS       30   /* encoder ticks per micro-pivot (~3°) */
 #define PIVOT_SUBSTEPS_90         30   /* number of micro-pivots for 90° */
 #define PIVOT_PAUSE_MS            10   /* brief stop between micro-pivots */
 #define PIVOT_SUBSTEP_TIMEOUT_MS  200  /* per-substep safety */
+#define POST_TURN_SETTLE_MS       300  /* let SensorTask median refresh after pivot */
+
+/* Angle correction (arctan-based, event-driven via rotate_iterative) */
+#define ANGLE_HISTORY_N      10   /* ring buffer length (10 * 20ms = 200ms accumulator) */
+#define ANGLE_CORRECT_DEG    10   /* below this magnitude, skip correction */
+#define MIN_DF_DELTA_CM      2    /* |dF_old - dF_new| < this -> ratio unreliable */
 
 /* HC-SR04 trigger */
 #define TRIG_PULSE        2
@@ -99,9 +104,17 @@ int dF = 0, dL = 0, dR = 0;            /* filtered distances (cm)        */
 int sF = 0, sL = 0, sR = 0;            /* per-window stddev (confidence) */
 int dF_prev = 0, dL_prev = 0, dR_prev = 0;
 
+/* Angle-correction ring buffer (filled by SensorTask each tick).
+ * angleCalculate() compares the oldest slot to the newest reading. */
+static int hist_dF[ANGLE_HISTORY_N];
+static int hist_dL[ANGLE_HISTORY_N];
+static int hist_dR[ANGLE_HISTORY_N];
+static int hist_idx   = 0;
+static int hist_count = 0;             /* warm-up counter; valid when == N */
+
 int ir_floor = 0, ir_left = 0, ir_right = 0;
 
-DriveState   state = START;
+DriveState   state = INIT;
 TrackingSide side  = TRACK_RIGHT;
 
 /* EMERGENCY commit state: lock turn direction until SEEK is stable for a while */
@@ -120,17 +133,15 @@ static void Error_Handler(void);
 /* Sensing */
 int  median7(int *a);
 int  stddev7(int *a);
+void angleHistoryFlush(void);
 void SensorTask(void *arg);
 void IR_Task(void *arg);
 
 /* Control */
 void    Motor_Drive(int v_left, int v_right);
 void    Motor_Stop(void);
-void    rotate(int degrees, bool left);
-void    rotate_to_side(bool left);
-void    rotate_ticks(int degrees, bool left);
 void    rotate_iterative(int degrees, bool left);
-void    switchTracking(void);
+bool    switchTracking(void);
 void    angleAdjusting(void);
 int     angleCalculate(void);
 uint8_t canProgressDirection(void);
@@ -185,6 +196,14 @@ int stddev7(int *a)
     return s;
 }
 
+/* Flush angle-correction history. Called by switchTracking() on side change
+ * and by angleAdjusting() after a corrective rotation invalidates the past. */
+void angleHistoryFlush(void)
+{
+    hist_idx   = 0;
+    hist_count = 0;
+}
+
 void SensorTask(void *arg)
 {
     (void)arg;
@@ -202,6 +221,13 @@ void SensorTask(void *arg)
         sF = stddev7(us_buf_F);
         sL = stddev7(us_buf_L);
         sR = stddev7(us_buf_R);
+
+        /* Push filtered values into angle-correction ring buffer. */
+        hist_dF[hist_idx] = dF;
+        hist_dL[hist_idx] = dL;
+        hist_dR[hist_idx] = dR;
+        hist_idx = (hist_idx + 1) % ANGLE_HISTORY_N;
+        if (hist_count < ANGLE_HISTORY_N) hist_count++;
 
         osDelay(SENS_PERIOD_MS);
     }
@@ -228,6 +254,7 @@ void IR_Task(void *arg)
         ir_floor = (int)HAL_ADC_GetValue(&AdcHandle3);
 
         osDelay(IR_PERIOD_MS);
+        printf("\r\n[IR_Bumping]Left : %d, Right : %d", ir_left, ir_right);
     }
 }
 
@@ -262,19 +289,6 @@ void Motor_Stop(void)
     Motor_Drive(0, 0);
 }
 
-/* Blocking in-place pivot by `degrees` toward `left` (true=CCW, false=CW).
- * Uses TURN_90_MS calibration; scales linearly for other angles.
- * Blocks ControlTask for ~(TURN_90_MS * degrees / 90) ms. */
-void rotate(int degrees, bool left)
-{
-    int ms = (TURN_90_MS * degrees) / 90;
-    if (ms <= 0) return;
-    if (left) Motor_Drive(-V_TURN,  V_TURN);   /* pivot left  (CCW) */
-    else      Motor_Drive( V_TURN, -V_TURN);   /* pivot right (CW)  */
-    osDelay(ms);
-    Motor_Stop();
-}
-
 /* Iterative encoder-based pivot (term_code.c pattern).
  *   N micro-pivots of M ticks each = `degrees` total.
  *   Each micro-pivot: stop, reset encoder, drive until ticks reached, stop.
@@ -307,91 +321,122 @@ void rotate_iterative(int degrees, bool left)
     printf("\r\n>> ROT-ITER %s deg=%d substeps=%d ms=%d",
            left ? "L" : "R", degrees, substeps, total_ms);
     osDelay(POST_TURN_SETTLE_MS);
-}
-
-/* Encoder-driven pivot: snapshots right encoder, drives until |Δticks| >= target.
- * Includes safety timeout and post-rotation settle so the median filter
- * reflects the new orientation before SEEK takes over. */
-void rotate_ticks(int degrees, bool left)
-{
-    int target = (TICKS_PER_90 * degrees) / 90;
-    if (target <= 0) return;
-
-    int start = (int)motorInterrupt1;
-    int elapsed = 0;
-    int diff = 0;
-
-    if (left) Motor_Drive(-V_TURN,  V_TURN);
-    else      Motor_Drive( V_TURN, -V_TURN);
-
-    while (elapsed < ROTATE_TIMEOUT_MS) {
-        osDelay(10);
-        elapsed += 10;
-        diff = (int)motorInterrupt1 - start;
-        if (diff < 0) diff = -diff;
-        if (diff >= target) break;
-    }
-    Motor_Stop();
-    printf("\r\n>> ROT %s deg=%d ticks=%d/%d ms=%d",
-           left ? "L" : "R", degrees, diff, target, elapsed);
-
-    /* Settle: hold still while median filter (~7 samples) refreshes
-     * with the post-rotation orientation. Critical to avoid charging
-     * forward on stale dF reading. */
-    osDelay(POST_TURN_SETTLE_MS);
-}
-
-/* Sensor-driven 90° pivot — no time calibration needed.
- * Snapshots the side distance, then rotates until front reads near that value.
- * `min_ms` avoids premature exit on transient dF readings.
- * `max_ms` is a safety timeout if convergence never happens (open space). */
-void rotate_to_side(bool left)
-{
-    const int min_ms = 200;
-    const int max_ms = 2500;
-    const int tol    = 3;       /* cm */
-    int target = left ? dR : dL;
-    int elapsed = 0;
-
-    if (left) Motor_Drive(-V_TURN,  V_TURN);
-    else      Motor_Drive( V_TURN, -V_TURN);
-
-    while (elapsed < max_ms) {
-        osDelay(20);
-        elapsed += 20;
-        int diff = dF - target;
-        if (diff < 0) diff = -diff;
-        if (elapsed >= min_ms && dF > 0 && diff <= tol) break;
-    }
-    Motor_Stop();
+    angleHistoryFlush();   /* heading changed -> all prior samples invalid */
 }
 
 /* ===========================================================================
  *  Control Layer — helpers
  * =========================================================================== */
-void switchTracking(void)
+
+/* Dynamic wall tracking — sticky policy:
+ *   - if the current side still reads a wall (0 < d <= D_TARGET): keep it
+ *   - else if the opposite side reads a wall: swap to it (flush history)
+ *   - else: leave `side` unchanged; caller demotes FSM to NON_ALIGN
+ * Returns true when a usable tracked wall is in place after the call. */
+bool switchTracking(void)
 {
-    /* TODO: flip `side` based on which wall is closer / more stable.
-     *       Compare (dL, sL) vs (dR, sR); prefer the lower-stddev side. */
+    bool cur_ok, alt_ok;
+    if (side == TRACK_RIGHT) {
+        cur_ok = (dR > 0 && dR <= D_TARGET);
+        alt_ok = (dL > 0 && dL <= D_TARGET);
+    } else {
+        cur_ok = (dL > 0 && dL <= D_TARGET);
+        alt_ok = (dR > 0 && dR <= D_TARGET);
+    }
+
+    if (cur_ok) return true;
+    if (alt_ok) {
+        side = (side == TRACK_RIGHT) ? TRACK_LEFT : TRACK_RIGHT;
+        angleHistoryFlush();
+        return true;
+    }
+    return false;
 }
 
-void angleAdjusting(void)
-{
-    /* TODO: small differential nudge to drive angleCalculate() toward 0.
-     *       Use Motor_Drive() with asymmetric v_left/v_right. */
-}
+/* Source sensor of the most recent non-zero angleCalculate() result.
+ * Consumed by angleAdjusting() to pick rotation direction. */
+static TrackingSide angle_source = TRACK_RIGHT;
 
+/* Heading angle from whichever side wall is currently measurable.
+ * Independent of `side` (tracking is policy; angle source is sensing).
+ *
+ * README's natural per-wall sign convention — NOT artificially unified:
+ *   theta from dR > 0  =>  tilted toward RIGHT wall  =>  rotate LEFT
+ *   theta from dL > 0  =>  tilted toward LEFT  wall  =>  rotate RIGHT
+ *
+ *   tan(theta_R) = (dR_old - dR_new) / (dF_old - dF_new)
+ *   tan(theta_L) = (dL_old - dL_new) / (dF_old - dF_new)
+ *
+ * Returns 0 (skip) when buffer not warm, |ΔdF| < MIN_DF_DELTA_CM, or no usable
+ * side reading on both current AND oldest sample. On non-zero return,
+ * `angle_source` holds the sensor used. */
 int angleCalculate(void)
 {
-    /* TODO: estimate yaw error from rate-of-change on the tracked side.
-     *       Positive = drifting away from wall, negative = drifting in. */
-    return 0;
+    if (hist_count < ANGLE_HISTORY_N) return 0;
+
+    int oldest = hist_idx;             /* slot about to be overwritten = oldest */
+    int dF_old = hist_dF[oldest];
+    int denom  = dF_old - dF;
+    int adenom = denom < 0 ? -denom : denom;
+    if (adenom < MIN_DF_DELTA_CM) return 0;
+
+    int dR_old = hist_dR[oldest];
+    int dL_old = hist_dL[oldest];
+    float denom_f = (float)denom;
+    float tan_theta;
+
+    if (dR > 0 && dR_old > 0) {
+        tan_theta    = (float)(dR_old - dR) / denom_f;
+        angle_source = TRACK_RIGHT;
+    } else if (dL > 0 && dL_old > 0) {
+        tan_theta    = (float)(dL_old - dL) / denom_f;
+        angle_source = TRACK_LEFT;
+    } else {
+        return 0;
+    }
+
+    float theta_rad = atanf(tan_theta);
+    return (int)(theta_rad * 57.2957795f);   /* rad -> deg */
 }
 
+/* Event-driven angle correction.
+ *   |theta| < ANGLE_CORRECT_DEG  -> straight cruise (most ticks)
+ *   |theta| >= ANGLE_CORRECT_DEG -> stop, pivot by |theta|, flush history
+ *
+ * Per-wall sign interpretation (no artificial unification):
+ *   source = R, theta > 0  =>  tilted toward right wall  =>  rotate LEFT
+ *   source = L, theta > 0  =>  tilted toward left  wall  =>  rotate RIGHT */
+void angleAdjusting(void)
+{
+    int deg = angleCalculate();
+    int mag = deg < 0 ? -deg : deg;
+
+    if (mag < ANGLE_CORRECT_DEG) {
+        Motor_Drive(V_CRUISE, V_CRUISE);
+        return;
+    }
+
+    bool turn_left = (angle_source == TRACK_RIGHT) ? (deg > 0) : (deg < 0);
+
+    printf("\r\n>> ANG-CORR theta=%d src=%s turn=%s",
+           deg, angle_source == TRACK_RIGHT ? "R" : "L", turn_left ? "L" : "R");
+
+    Motor_Stop();
+    osDelay(50);
+    rotate_iterative(mag, turn_left);
+}
+
+/* Bitmask of directions that won't immediately re-enter EMERGENCY if taken.
+ *   bit set => after rotating/proceeding that way, new front >= EMG_FRONT
+ *   The EMG_FRONT (not D_TARGET) threshold matters: side reading > EMG_FRONT is
+ *   "safe to turn into" regardless of whether it's within tracking range. */
 uint8_t canProgressDirection(void)
 {
-    /* TODO: return bitmask of DIR_LEFT | DIR_FORWARD | DIR_RIGHT. */
-    return 0;
+    uint8_t mask = 0;
+    if (dF == 0 || dF > EMG_FRONT) mask |= DIR_FORWARD;
+    if (dL == 0 || dL > EMG_FRONT) mask |= DIR_LEFT;
+    if (dR == 0 || dR > EMG_FRONT) mask |= DIR_RIGHT;
+    return mask;
 }
 
 bool isEmergency(void)
@@ -412,50 +457,85 @@ void ControlTask(void *arg)
 {
     (void)arg;
     static const char *state_name[] = {
-        "START","SEEK","ALIGNED","LOCKED","EMERGENCY","INTERSECT","ENCOUNT","STOP"
+        "INIT","SEEK","ALIGN_PROG","NON_ALIGN_PROG","EMERGENCY"
     };
     uint32_t tick = 0;
 
     osDelay(CTRL_WARMUP_MS);
     for (;;) {
+        /* Top-level guard: any state can be preempted by EMERGENCY. */
         if (isEmergency()) state = EMERGENCY;
 
-        /* LED1 toggles every ~500ms -> visual proof scheduler is alive */
-        if ((tick++ % 25) == 0) {
-            BSP_LED_Toggle(LED1);
-            printf("\r\n[%s] dF=%d dL=%d dR=%d | sF=%d sL=%d sR=%d | irF=%d irL=%d irR=%d",
-                   state_name[state], dF, dL, dR, sF, sL, sR, ir_floor, ir_left, ir_right);
-        }
-
         switch (state) {
-            case START:
-                /* TODO: wait until sensors warm up; transition to SEEK. */
-                state = SEEK;
+            case INIT:
+                /* Wait for first valid front + any side reading. */
+                if (dF > 0 && (dL > 0 || dR > 0)) state = SEEK;
                 break;
 
             case SEEK: {
-                /* Drive forward; veer away from whichever side gets too close. */
+                /* No tracked wall yet — cruise forward, veer off if a side gets dangerously close. */
                 int vL = V_CRUISE, vR = V_CRUISE;
-                if (dR > 0 && dR < D_MIN) vR = V_CRUISE / 2;   /* right wall close -> curve left */
-                if (dL > 0 && dL < D_MIN) vL = V_CRUISE / 2;   /* left  wall close -> curve right */
+                if (dR > 0 && dR < D_MIN) vR = V_CRUISE / 2;
+                if (dL > 0 && dL < D_MIN) vL = V_CRUISE / 2;
                 Motor_Drive(vL, vR);
 
-                /* Release direction commitment after stable SEEK time */
+                if (switchTracking()) state = ALIGN_PROGRESS;
                 if (++seek_clear_ticks >= EMERG_RELEASE_TICKS) emerg_committed = false;
             } break;
 
-            case ALIGNED:
-                /* TODO: cruise. angleAdjusting() each tick; watch dF for INTERSECT. */
-                break;
+            case ALIGN_PROGRESS: {
+                /* Sticky tracking: only swaps if current side is lost.
+                 * Returns false -> no usable wall on either side -> demote. */
+                if (!switchTracking()) {
+                    state = NON_ALIGN_PROGRESS;
+                    break;
+                }
 
-            case LOCKED:
-                /* TODO: all sides under D_MIN — back off and re-seek. */
-                break;
+                /* arctan-based event-driven correction (see angleAdjusting). */
+                angleAdjusting();
+
+                if (++seek_clear_ticks >= EMERG_RELEASE_TICKS) emerg_committed = false;
+            } break;
+
+            case NON_ALIGN_PROGRESS: {
+                /* No tracked wall — drive straight; promote back to ALIGN once one appears. */
+                Motor_Drive(V_CRUISE, V_CRUISE);
+
+                if (switchTracking()) state = ALIGN_PROGRESS;
+                if (++seek_clear_ticks >= EMERG_RELEASE_TICKS) emerg_committed = false;
+            } break;
 
             case EMERGENCY: {
+                /* Pick rotation direction via canProgressDirection().
+                 *
+                 *   no tracked wall                 -> default right turn
+                 *   both sides progressable         -> rotate so the previously-blocking
+                 *                                      front wall ends up on `side`
+                 *                                      (TRACK_RIGHT -> left turn,
+                 *                                       TRACK_LEFT  -> right turn)
+                 *   only one side progressable      -> rotate that way
+                 *   none progressable (dead end)    -> default right
+                 *
+                 * Commit on first entry; reuse until SEEK clears. */
                 bool first = !emerg_committed;
                 if (first) {
-                    emerg_turn_left = (dL >= dR);
+                    uint8_t mask = canProgressDirection();
+                    bool can_left  = (mask & DIR_LEFT)  != 0;
+                    bool can_right = (mask & DIR_RIGHT) != 0;
+                    bool has_track = (dR > 0 && dR <= D_TARGET) ||
+                                     (dL > 0 && dL <= D_TARGET);
+
+                    if (!has_track) {
+                        emerg_turn_left = false;                     /* default right */
+                    } else if (can_left && can_right) {
+                        emerg_turn_left = (side == TRACK_RIGHT);     /* front wall -> new `side` */
+                    } else if (can_left) {
+                        emerg_turn_left = true;
+                    } else if (can_right) {
+                        emerg_turn_left = false;
+                    } else {
+                        emerg_turn_left = false;                     /* dead end */
+                    }
                     emerg_committed = true;
                 }
                 seek_clear_ticks = 0;
@@ -464,21 +544,9 @@ void ControlTask(void *arg)
                        first ? "NEW" : "KEEP", dF, dL, dR);
                 Motor_Stop();
                 osDelay(50);
-                rotate_iterative(90, emerg_turn_left);   /* term_code pattern, with settle */
+                rotate_iterative(90, emerg_turn_left);
                 state = SEEK;
             } break;
-
-            case INTERSECT:
-                /* TODO: use canProgressDirection() to pick a turn. */
-                break;
-
-            case ENCOUNT:
-                /* TODO: brief pause; if obstacle persists, treat as wall. */
-                break;
-
-            case STOP:
-                Motor_Stop();
-                break;
         }
         osDelay(CTRL_PERIOD_MS);
     }
