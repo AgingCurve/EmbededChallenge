@@ -697,26 +697,27 @@ void ControlTask(void *arg)
                     break;
                 }
 
-                /* Side-wall avoidance: stop, pivot away, then drive forward briefly so
-                 * the next tick isn't stuck in the same trigger zone (in-place pivots
-                 * don't change position, so dR<D_MIN would recur indefinitely). */
-                if (dR > 0 && dR < D_MIN) {
-                    printf("\r\n>> VEER L deg=%d dR=%d", ROTATE_VEER_DEG, dR);
-                    Motor_Stop();
-                    osDelay(50);
-                    rotate_iterative(ROTATE_VEER_DEG, true);   /* R wall close -> pivot LEFT */
-                    Motor_Drive(V_CRUISE + V_TRIM_L, V_CRUISE);
-                    osDelay(ESCAPE_FORWARD_MS_VEER);
-                } else if (dL > 0 && dL < D_MIN) {
-                    printf("\r\n>> VEER R deg=%d dL=%d", ROTATE_VEER_DEG, dL);
-                    Motor_Stop();
-                    osDelay(50);
-                    rotate_iterative(ROTATE_VEER_DEG, false);  /* L wall close -> pivot RIGHT */
-                    Motor_Drive(V_CRUISE + V_TRIM_L, V_CRUISE);
-                    osDelay(ESCAPE_FORWARD_MS_VEER);
-                } else {
-                    Motor_Drive(V_CRUISE + V_TRIM_L, V_CRUISE);
-                }
+                /* VEER disabled — grid-based course + V_TRIM_L straight drive is
+                 * accurate enough that side-wall pivots aren't needed. Keep the
+                 * block as reference for re-enabling on noisier courses.
+                 *
+                 * if (dR > 0 && dR < D_MIN) {
+                 *     printf("\r\n>> VEER L deg=%d dR=%d", ROTATE_VEER_DEG, dR);
+                 *     Motor_Stop();
+                 *     osDelay(50);
+                 *     rotate_iterative(ROTATE_VEER_DEG, true);
+                 *     Motor_Drive(V_CRUISE + V_TRIM_L, V_CRUISE);
+                 *     osDelay(ESCAPE_FORWARD_MS_VEER);
+                 * } else if (dL > 0 && dL < D_MIN) {
+                 *     printf("\r\n>> VEER R deg=%d dL=%d", ROTATE_VEER_DEG, dL);
+                 *     Motor_Stop();
+                 *     osDelay(50);
+                 *     rotate_iterative(ROTATE_VEER_DEG, false);
+                 *     Motor_Drive(V_CRUISE + V_TRIM_L, V_CRUISE);
+                 *     osDelay(ESCAPE_FORWARD_MS_VEER);
+                 * }
+                 */
+                Motor_Drive(V_CRUISE + V_TRIM_L, V_CRUISE);
 
                 if (++seek_clear_ticks >= EMERG_RELEASE_TICKS) emerg_committed = false;
             } break;
