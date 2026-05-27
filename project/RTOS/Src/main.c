@@ -47,6 +47,8 @@
 /* Motor PWM */
 #define PWM_PERIOD          20000
 #define V_CRUISE            16000   /* duty for all forward drive (SEEK / ALIGN / NON_ALIGN) */
+#define V_TRIM_L            1000    /* extra duty on LEFT wheel for straight-line drift trim
+                                     * (motors/wheels asymmetric -- same duty != same speed). */
 #define V_TURN              20000   /* full duty for max pivot torque */
 
 /* Iterative pivot — the only rotation primitive.
@@ -567,7 +569,7 @@ void angleAdjusting(void)
     int mag = deg < 0 ? -deg : deg;
 
     if (mag < ANGLE_CORRECT_DEG) {
-        Motor_Drive(V_CRUISE, V_CRUISE);
+        Motor_Drive(V_CRUISE + V_TRIM_L, V_CRUISE);
         return;
     }
 
@@ -678,8 +680,8 @@ void ControlTask(void *arg)
             case SEEK: {
                 /* No tracked wall yet — cruise forward, veer AWAY from a side that gets dangerously close.
                  * Differential drive: slowing the FAR-side wheel pivots the robot away from the near wall. */
-                int vL = V_CRUISE, vR = V_CRUISE;
-                if (dR > 0 && dR < D_MIN) vL = V_CRUISE / 2;   /* R wall close -> slow L -> veer LEFT */
+                int vL = V_CRUISE + V_TRIM_L, vR = V_CRUISE;   /* trimmed straight default */
+                if (dR > 0 && dR < D_MIN) vL = V_CRUISE / 2;   /* R wall close -> slow L -> veer LEFT (override trim) */
                 if (dL > 0 && dL < D_MIN) vR = V_CRUISE / 2;   /* L wall close -> slow R -> veer RIGHT */
                 Motor_Drive(vL, vR);
 
@@ -703,17 +705,17 @@ void ControlTask(void *arg)
                     Motor_Stop();
                     osDelay(50);
                     rotate_iterative(ROTATE_VEER_DEG, true);   /* R wall close -> pivot LEFT */
-                    Motor_Drive(V_CRUISE, V_CRUISE);
+                    Motor_Drive(V_CRUISE + V_TRIM_L, V_CRUISE);
                     osDelay(ESCAPE_FORWARD_MS_VEER);
                 } else if (dL > 0 && dL < D_MIN) {
                     printf("\r\n>> VEER R deg=%d dL=%d", ROTATE_VEER_DEG, dL);
                     Motor_Stop();
                     osDelay(50);
                     rotate_iterative(ROTATE_VEER_DEG, false);  /* L wall close -> pivot RIGHT */
-                    Motor_Drive(V_CRUISE, V_CRUISE);
+                    Motor_Drive(V_CRUISE + V_TRIM_L, V_CRUISE);
                     osDelay(ESCAPE_FORWARD_MS_VEER);
                 } else {
-                    Motor_Drive(V_CRUISE, V_CRUISE);
+                    Motor_Drive(V_CRUISE + V_TRIM_L, V_CRUISE);
                 }
 
                 if (++seek_clear_ticks >= EMERG_RELEASE_TICKS) emerg_committed = false;
@@ -721,7 +723,7 @@ void ControlTask(void *arg)
 
             case NON_ALIGN_PROGRESS: {
                 /* No tracked wall — drive straight; promote back to ALIGN once one appears. */
-                Motor_Drive(V_CRUISE, V_CRUISE);
+                Motor_Drive(V_CRUISE + V_TRIM_L, V_CRUISE);
 
                 if (switchTracking()) state = ALIGN_PROGRESS;
                 if (++seek_clear_ticks >= EMERG_RELEASE_TICKS) emerg_committed = false;
@@ -762,7 +764,7 @@ void ControlTask(void *arg)
                  * leaves the robot still inside the trigger zone; add a brief
                  * forward escape to break the loop. US (90°) doesn't need it. */
                 if (emerg_turn_deg == EMERG_IR_DEG) {
-                    Motor_Drive(V_CRUISE, V_CRUISE);
+                    Motor_Drive(V_CRUISE + V_TRIM_L, V_CRUISE);
                     osDelay(ESCAPE_FORWARD_MS_IR);
                 }
                 state = SEEK;
