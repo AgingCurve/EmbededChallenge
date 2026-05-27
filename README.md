@@ -116,12 +116,13 @@ typedef enum { TRACK_LEFT = 0, TRACK_RIGHT } TrackingSide;
 | 상수 | 값 | 의미 |
 |---|---|---|
 | `PIVOT_SUBSTEP_TICKS` | 30 | 마이크로 피벗 1회당 엔코더 틱 (~3°) |
-| `PIVOT_SUBSTEPS_90` | 30 | 90° 회전을 위한 마이크로 피벗 횟수 |
+| `PIVOT_SUBSTEPS_90_L` | 26 | 90° 좌회전 마이크로 피벗 횟수 (캘리브 2026-05-27) |
+| `PIVOT_SUBSTEPS_90_R` | 25 | 90° 우회전 마이크로 피벗 횟수 (캘리브 2026-05-27) |
 | `PIVOT_PAUSE_MS` | 10 | 마이크로 피벗 사이 정지 시간 |
 | `PIVOT_SUBSTEP_TIMEOUT_MS` | 200 | 마이크로 피벗당 안전 timeout |
 | `POST_TURN_SETTLE_MS` | 300 | 회전 후 median filter 갱신 대기 |
 
-> 총 틱: `PIVOT_SUBSTEPS_90 × PIVOT_SUBSTEP_TICKS = 900` (= 90°). 캘리브 시 **`PIVOT_SUBSTEPS_90`만 조정** (틱 수는 고정).
+> L/R 분리: 좌/우 바퀴의 effective ticks-per-degree 가 미세하게 달라서 (모터·인코더 비대칭) 분리 상수가 필요. 캘리브는 `CALIB_PIVOT` 모드에서 4×90° 라운드트립으로 측정 → 시작/끝 방향 일치하도록 각 상수만 조정 (틱 수는 고정).
 
 ### Angle Correction (arctan 기반)
 | 상수 | 값 | 의미 |

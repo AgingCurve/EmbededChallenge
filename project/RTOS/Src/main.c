@@ -48,10 +48,13 @@
 #define V_TURN              20000   /* full duty for max pivot torque */
 
 /* Iterative pivot — the only rotation primitive.
- * 90° = PIVOT_SUBSTEPS_90 × PIVOT_SUBSTEP_TICKS encoder ticks total.
- * Tune PIVOT_SUBSTEPS_90 against measured rotation; keep tick count fixed. */
+ * 90° = PIVOT_SUBSTEPS_90_x × PIVOT_SUBSTEP_TICKS encoder ticks total.
+ * L/R split because the two wheels have slightly different effective
+ * ticks-per-degree (motor/encoder asymmetry). Tune by 4×90° round-trip
+ * calibration (CALIB_PIVOT mode); keep tick count fixed. */
 #define PIVOT_SUBSTEP_TICKS       30   /* encoder ticks per micro-pivot (~3°) */
-#define PIVOT_SUBSTEPS_90         30   /* number of micro-pivots for 90° */
+#define PIVOT_SUBSTEPS_90_L       26   /* micro-pivots for 90° LEFT  (calib 2026-05-27) */
+#define PIVOT_SUBSTEPS_90_R       25   /* micro-pivots for 90° RIGHT (calib 2026-05-27) */
 #define PIVOT_PAUSE_MS            10   /* brief stop between micro-pivots */
 #define PIVOT_SUBSTEP_TIMEOUT_MS  200  /* per-substep safety */
 #define POST_TURN_SETTLE_MS       300  /* let SensorTask median refresh after pivot */
@@ -409,7 +412,8 @@ void Motor_Stop(void)
  */
 void rotate_iterative(int degrees, bool left)
 {
-    int substeps = (PIVOT_SUBSTEPS_90 * degrees) / 90;
+    int subs90 = left ? PIVOT_SUBSTEPS_90_L : PIVOT_SUBSTEPS_90_R;
+    int substeps = (subs90 * degrees) / 90;
     if (substeps <= 0) return;
 
     /* pivot LEFT  (CCW): right wheel forward -> use motorInterrupt1
