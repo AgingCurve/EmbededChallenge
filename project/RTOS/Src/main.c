@@ -67,6 +67,11 @@
 /* ADC */
 #define ADC_POLL_TIMEOUT  0xFF
 
+/* Pivot calibration mode — when 1, ControlTask skips the FSM and runs a
+ * 4x90° round-trip (right then left) so PIVOT_SUBSTEPS_90 can be measured
+ * against floor markings. Set to 0 for normal driving. */
+#define CALIB_PIVOT       1
+
 /* ===========================================================================
  *  Peripherals
  * =========================================================================== */
@@ -603,6 +608,27 @@ void ControlTask(void *arg)
     uint32_t tick = 0;
 
     osDelay(CTRL_WARMUP_MS);
+
+#if CALIB_PIVOT
+    /* Calibration: 4×90° right (should close 360°), pause, 4×90° left (same).
+     * Mark heading on floor before boot, compare on stop. Tune PIVOT_SUBSTEPS_90. */
+    osDelay(1000);
+    for (int i = 0; i < 4; i++) {
+        printf("\r\n>> CALIB R %d/4", i + 1);
+        rotate_iterative(90, false);
+        osDelay(1000);
+    }
+    osDelay(2000);
+    for (int i = 0; i < 4; i++) {
+        printf("\r\n>> CALIB L %d/4", i + 1);
+        rotate_iterative(90, true);
+        osDelay(1000);
+    }
+    printf("\r\n>> CALIB DONE");
+    Motor_Stop();
+    for (;;) osDelay(1000);   /* trap — flip CALIB_PIVOT to 0 and reflash */
+#endif
+
     for (;;) {
         /* Top-level guard: any state can be preempted by EMERGENCY. */
         if (isEmergency()) state = EMERGENCY;
