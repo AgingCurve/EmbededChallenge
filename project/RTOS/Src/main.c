@@ -580,19 +580,17 @@ void angleAdjusting(void)
 }
 
 /**
- * @brief  Bitmask of directions safe to take/turn into right now.
- * @return OR of DIR_FORWARD / DIR_LEFT / DIR_RIGHT bits; set means safe.
- * @note   "Safe" = the corresponding sensor either sees nothing (==0) or
- *         reads a distance > EMG_FRONT. Used in EMERGENCY to pick which
- *         way to rotate so the robot doesn't immediately re-enter EMERGENCY.
+ * @brief  Picks the side with more open space (wider distance).
+ * @return DIR_LEFT or DIR_RIGHT — whichever side reads further.
+ * @note   No fixed threshold (EMG_FRONT no longer used here); just compares
+ *         dL vs dR. A reading of 0 means "no echo" which we treat as
+ *         effectively wide-open. Used by EMERGENCY to choose pivot direction.
  */
 uint8_t canProgressDirection(void)
 {
-    uint8_t mask = 0;
-    if (dF == 0 || dF > EMG_FRONT) mask |= DIR_FORWARD;
-    if (dL == 0 || dL > EMG_FRONT) mask |= DIR_LEFT;
-    if (dR == 0 || dR > EMG_FRONT) mask |= DIR_RIGHT;
-    return mask;
+    int eff_L = (dL == 0) ? 9999 : dL;
+    int eff_R = (dR == 0) ? 9999 : dR;
+    return (eff_L >= eff_R) ? DIR_LEFT : DIR_RIGHT;
 }
 
 /**
@@ -730,17 +728,8 @@ void ControlTask(void *arg)
             case EMERGENCY: {
                 /* Front-blocked (ultrasonic) ALWAYS takes priority over IR --
                  * a wall ahead needs a full 90° pivot even if a side IR also
-                 * trips, otherwise a 45° nudge leaves the wall still in front
-                 * and the robot re-enters EMERGENCY immediately.
-                 *
-                 *   front blocked (dF <= EMG_FRONT) -> US branch (90°)
-                 *     no tracked wall                 -> default right turn
-                 *     both sides progressable         -> rotate so previously-blocking
-                 *                                        front wall ends up on `side`
-                 *     only one side progressable      -> rotate that way
-                 *     none progressable (dead end)    -> default right
-                 *   else IR side bumper hit          -> IR branch (45°)
-                 *     rotate away from the hit side; if both, away from higher (closer)
+                 * trips. US branch picks the wider side via canProgressDirection().
+                 * IR branch is a 45° nudge away from the tripped bumper.
                  *
                  * Commit on first entry; reuse until SEEK clears. */
                 bool first = !emerg_committed;
@@ -751,23 +740,7 @@ void ControlTask(void *arg)
 
                     if (front_emerg) {
                         emerg_turn_deg = EMERG_US_DEG;
-                        uint8_t mask = canProgressDirection();
-                        bool can_left  = (mask & DIR_LEFT)  != 0;
-                        bool can_right = (mask & DIR_RIGHT) != 0;
-                        bool has_track = (dR > 0 && dR <= D_TARGET) ||
-                                         (dL > 0 && dL <= D_TARGET);
-
-                        if (!has_track) {
-                            emerg_turn_left = false;                     /* default right */
-                        } else if (can_left && can_right) {
-                            emerg_turn_left = (side == TRACK_RIGHT);     /* front wall -> new `side` */
-                        } else if (can_left) {
-                            emerg_turn_left = true;
-                        } else if (can_right) {
-                            emerg_turn_left = false;
-                        } else {
-                            emerg_turn_left = false;                     /* dead end */
-                        }
+                        emerg_turn_left = (canProgressDirection() == DIR_LEFT);
                     } else if (ir_l_hit || ir_r_hit) {
                         emerg_turn_deg = EMERG_IR_DEG;
                         if (ir_l_hit && ir_r_hit) emerg_turn_left = (ir_right > ir_left);  /* away from higher (closer) */

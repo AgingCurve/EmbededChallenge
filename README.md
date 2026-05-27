@@ -54,7 +54,7 @@ An FSM handles state transitions and condition checks. Wall-switching logic is a
 - `bool switchTracking(void)` — Dynamic tracking sticky 정책, 추적측 끊기면 swap
 - `int  angleCalculate(void)` — arctan 기반 heading 편차 계산 (signed degrees, 소스 자동 선택)
 - `void angleAdjusting(void)` — `|θ| >= ANGLE_CORRECT_DEG` 시 이벤트성 회전 보정
-- `uint8_t canProgressDirection(void)` — 진행 가능 방향 bitmask (DIR_FORWARD/LEFT/RIGHT)
+- `uint8_t canProgressDirection(void)` — 더 넓은 측면 선택 → DIR_LEFT 또는 DIR_RIGHT (dL vs dR 비교, 0=무한대 처리). EMG_FRONT 안 씀.
 - `bool isEmergency(void)` — 정면 충돌 임박 판정 (`0 < dF <= EMG_FRONT`)
 - `bool emergencyResolved(void)` — 정면 hysteresis 해제 (`dF > EMG_FRONT + EMG_FRONT_HYST`)
 
