@@ -637,10 +637,11 @@ void ControlTask(void *arg)
                 break;
 
             case SEEK: {
-                /* No tracked wall yet — cruise forward, veer off if a side gets dangerously close. */
+                /* No tracked wall yet — cruise forward, veer AWAY from a side that gets dangerously close.
+                 * Differential drive: slowing the FAR-side wheel pivots the robot away from the near wall. */
                 int vL = V_CRUISE, vR = V_CRUISE;
-                if (dR > 0 && dR < D_MIN) vR = V_CRUISE / 2;
-                if (dL > 0 && dL < D_MIN) vL = V_CRUISE / 2;
+                if (dR > 0 && dR < D_MIN) vL = V_CRUISE / 2;   /* R wall close -> slow L -> veer LEFT */
+                if (dL > 0 && dL < D_MIN) vR = V_CRUISE / 2;   /* L wall close -> slow R -> veer RIGHT */
                 Motor_Drive(vL, vR);
 
                 if (switchTracking()) state = ALIGN_PROGRESS;
@@ -660,10 +661,11 @@ void ControlTask(void *arg)
 
                 /* Distance safety net (mirrors SEEK's veer-off). arctan only
                  * fires when the front wall is changing; without this, a long
-                 * straight corridor lets the robot drift into the side wall. */
+                 * straight corridor lets the robot drift into the side wall.
+                 * Slow the FAR-side wheel so the robot pivots AWAY from the near wall. */
                 int vL = V_CRUISE, vR = V_CRUISE;
-                if (dR > 0 && dR < D_MIN) vR = V_CRUISE / 2;
-                if (dL > 0 && dL < D_MIN) vL = V_CRUISE / 2;
+                if (dR > 0 && dR < D_MIN) vL = V_CRUISE / 2;   /* R wall close -> slow L -> veer LEFT */
+                if (dL > 0 && dL < D_MIN) vR = V_CRUISE / 2;   /* L wall close -> slow R -> veer RIGHT */
                 Motor_Drive(vL, vR);
 
                 if (++seek_clear_ticks >= EMERG_RELEASE_TICKS) emerg_committed = false;
