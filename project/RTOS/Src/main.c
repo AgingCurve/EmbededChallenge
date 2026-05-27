@@ -40,8 +40,9 @@
 #define D_OPEN            150       /* > D_OPEN => "no wall on this side" */
 #define EMG_FRONT         9        /* emergency front threshold (cm) */
 #define EMG_FRONT_HYST    2        /* +cm margin to clear EMERGENCY */
-#define IR_BUMPER_THRESH  1000     /* raw ADC; ir_left/right ABOVE this => bumper triggered.
-                                    * Sensor is direct (closer = higher ADC). Baseline far ~100-500. */
+#define IR_BUMPER_THRESH  150      /* raw ADC; ir_left/right BELOW this => bumper triggered.
+                                    * Sensor is inverse (closer = lower ADC). Baseline far ~200-400,
+                                    * close-contact drops to 30-100. */
 #define EMERG_IR_DEG      30       /* rotation angle when IR bumper triggers EMERGENCY (small nudge) */
 #define EMERG_US_DEG      90       /* rotation angle when front ultrasonic triggers EMERGENCY (full pivot) */
 
@@ -600,8 +601,8 @@ uint8_t canProgressDirection(void)
 bool isEmergency(void)
 {
     return (dF > 0 && dF <= EMG_FRONT) ||
-           (ir_left  > IR_BUMPER_THRESH) ||
-           (ir_right > IR_BUMPER_THRESH);
+           (ir_left  > 0 && ir_left  < IR_BUMPER_THRESH) ||
+           (ir_right > 0 && ir_right < IR_BUMPER_THRESH);
 }
 
 /**
@@ -726,8 +727,8 @@ void ControlTask(void *arg)
 
             case EMERGENCY: {
                 /* Pick rotation direction. IR bumper takes priority — if a side
-                 * bumper trips (higher ADC = closer), rotate AWAY from it. The
-                 * side with the HIGHER reading is closer when both fire.
+                 * bumper trips (lower ADC = closer), rotate AWAY from it. The
+                 * side with the LOWER reading is closer when both fire.
                  * Otherwise fall back to front-wall reasoning:
                  *
                  *   no tracked wall                 -> default right turn
@@ -739,13 +740,15 @@ void ControlTask(void *arg)
                  * Commit on first entry; reuse until SEEK clears. */
                 bool first = !emerg_committed;
                 if (first) {
-                    bool ir_l_hit = (ir_left  > IR_BUMPER_THRESH);
-                    bool ir_r_hit = (ir_right > IR_BUMPER_THRESH);
+                    bool ir_l_hit = (ir_left  > 0 && ir_left  < IR_BUMPER_THRESH);
+                    bool ir_r_hit = (ir_right > 0 && ir_right < IR_BUMPER_THRESH);
 
                     if (ir_l_hit || ir_r_hit) {
-                        /* IR bumper: small nudge (sensors near front corners). */
+                        /* IR bumper: small nudge (sensors near front corners).
+                         * Inverse sensor (lower = closer): when both hit, the
+                         * side with the LOWER reading is closer -> away from it. */
                         emerg_turn_deg = EMERG_IR_DEG;
-                        if (ir_l_hit && ir_r_hit) emerg_turn_left = (ir_right > ir_left);  /* both: away from higher (closer) */
+                        if (ir_l_hit && ir_r_hit) emerg_turn_left = (ir_right < ir_left);  /* both: away from lower (closer) */
                         else if (ir_l_hit)        emerg_turn_left = false;                 /* left bumper  -> turn right */
                         else                      emerg_turn_left = true;                  /* right bumper -> turn left  */
                     } else {
