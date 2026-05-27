@@ -656,13 +656,9 @@ void ControlTask(void *arg)
                     break;
                 }
 
-                /* arctan-based event-driven correction (see angleAdjusting). */
-                angleAdjusting();
-
-                /* Distance safety net (mirrors SEEK's veer-off). arctan only
-                 * fires when the front wall is changing; without this, a long
-                 * straight corridor lets the robot drift into the side wall.
-                 * Slow the FAR-side wheel so the robot pivots AWAY from the near wall. */
+                /* arctan correction disabled — falling back to pure distance-based
+                 * veer-off until the angle calculation is rethought. Slow the
+                 * FAR-side wheel so the robot pivots AWAY from the near wall. */
                 int vL = V_CRUISE, vR = V_CRUISE;
                 if (dR > 0 && dR < D_MIN) vL = V_CRUISE / 2;   /* R wall close -> slow L -> veer LEFT */
                 if (dL > 0 && dL < D_MIN) vR = V_CRUISE / 2;   /* L wall close -> slow R -> veer RIGHT */
