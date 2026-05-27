@@ -38,8 +38,9 @@
 #define D_TARGET          20       /* wall-follow target distance */
 #define D_MIN             10        /* lower safety bound          */
 #define D_OPEN            150       /* > D_OPEN => "no wall on this side" */
-#define EMG_FRONT         9        /* emergency front threshold   */
+#define EMG_FRONT         9        /* emergency front threshold (cm) */
 #define EMG_FRONT_HYST    2        /* +cm margin to clear EMERGENCY */
+#define IR_BUMPER_THRESH  70       /* raw ADC; ir_left/right > this => bumper triggered */
 
 /* Motor PWM */
 #define PWM_PERIOD          20000
@@ -573,11 +574,13 @@ uint8_t canProgressDirection(void)
 
 /**
  * @brief  True when a forward obstacle is close enough to require evasion.
- * @return dF in (0, EMG_FRONT] — front ultrasonic only (floor IR unwired).
+ * @return dF in (0, EMG_FRONT] OR either side IR bumper above threshold.
  */
 bool isEmergency(void)
 {
-    return (dF > 0 && dF <= EMG_FRONT);
+    return (dF > 0 && dF <= EMG_FRONT) ||
+           (ir_left  > IR_BUMPER_THRESH) ||
+           (ir_right > IR_BUMPER_THRESH);
 }
 
 /**
@@ -670,42 +673,52 @@ void ControlTask(void *arg)
             } break;
 
             case EMERGENCY: {
-                /* Pick rotation direction via canProgressDirection().
+                /* Pick rotation direction. IR bumper takes priority — if a
+                 * side bumper is tripped, rotate away from it (more aggressively
+                 * triggered side wins when both are hit). Otherwise fall back to
+                 * front-wall reasoning via canProgressDirection():
                  *
                  *   no tracked wall                 -> default right turn
                  *   both sides progressable         -> rotate so the previously-blocking
                  *                                      front wall ends up on `side`
-                 *                                      (TRACK_RIGHT -> left turn,
-                 *                                       TRACK_LEFT  -> right turn)
                  *   only one side progressable      -> rotate that way
                  *   none progressable (dead end)    -> default right
                  *
                  * Commit on first entry; reuse until SEEK clears. */
                 bool first = !emerg_committed;
                 if (first) {
-                    uint8_t mask = canProgressDirection();
-                    bool can_left  = (mask & DIR_LEFT)  != 0;
-                    bool can_right = (mask & DIR_RIGHT) != 0;
-                    bool has_track = (dR > 0 && dR <= D_TARGET) ||
-                                     (dL > 0 && dL <= D_TARGET);
+                    bool ir_l = (ir_left  > IR_BUMPER_THRESH);
+                    bool ir_r = (ir_right > IR_BUMPER_THRESH);
 
-                    if (!has_track) {
-                        emerg_turn_left = false;                     /* default right */
-                    } else if (can_left && can_right) {
-                        emerg_turn_left = (side == TRACK_RIGHT);     /* front wall -> new `side` */
-                    } else if (can_left) {
-                        emerg_turn_left = true;
-                    } else if (can_right) {
-                        emerg_turn_left = false;
+                    if (ir_l || ir_r) {
+                        if (ir_l && ir_r) emerg_turn_left = (ir_right > ir_left);  /* both hit -> away from worse */
+                        else if (ir_l)    emerg_turn_left = false;                 /* left bumper  -> turn right */
+                        else              emerg_turn_left = true;                  /* right bumper -> turn left  */
                     } else {
-                        emerg_turn_left = false;                     /* dead end */
+                        uint8_t mask = canProgressDirection();
+                        bool can_left  = (mask & DIR_LEFT)  != 0;
+                        bool can_right = (mask & DIR_RIGHT) != 0;
+                        bool has_track = (dR > 0 && dR <= D_TARGET) ||
+                                         (dL > 0 && dL <= D_TARGET);
+
+                        if (!has_track) {
+                            emerg_turn_left = false;                     /* default right */
+                        } else if (can_left && can_right) {
+                            emerg_turn_left = (side == TRACK_RIGHT);     /* front wall -> new `side` */
+                        } else if (can_left) {
+                            emerg_turn_left = true;
+                        } else if (can_right) {
+                            emerg_turn_left = false;
+                        } else {
+                            emerg_turn_left = false;                     /* dead end */
+                        }
                     }
                     emerg_committed = true;
                 }
                 seek_clear_ticks = 0;
-                printf("\r\n>> EMERG %s commit=%s dF=%d dL=%d dR=%d",
+                printf("\r\n>> EMERG %s commit=%s dF=%d dL=%d dR=%d ir(L/R)=%d/%d",
                        emerg_turn_left ? "LEFT" : "RIGHT",
-                       first ? "NEW" : "KEEP", dF, dL, dR);
+                       first ? "NEW" : "KEEP", dF, dL, dR, ir_left, ir_right);
                 Motor_Stop();
                 osDelay(50);
                 rotate_iterative(90, emerg_turn_left);
