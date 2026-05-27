@@ -415,11 +415,17 @@ void rotate_iterative(int degrees, bool left)
     for (int i = 0; i < substeps; i++) {
         Motor_Stop();
         osDelay(PIVOT_PAUSE_MS);
-        *enc = 1;
+        *enc = 0;
         if (left) Motor_Drive(-V_TURN,  V_TURN);
         else      Motor_Drive( V_TURN, -V_TURN);
+        /* Encoder ISR may ++ or -- depending on wheel-direction polarity
+         * (mirrored motors on differential drive). Cast to int16_t so an
+         * underflow (0 -> 65535) reads as -1, and compare |displacement|. */
         int t = 0;
-        while (*enc < PIVOT_SUBSTEP_TICKS && t < PIVOT_SUBSTEP_TIMEOUT_MS) {
+        while (t < PIVOT_SUBSTEP_TIMEOUT_MS) {
+            int16_t s = (int16_t)*enc;
+            if (s < 0) s = -s;
+            if (s >= PIVOT_SUBSTEP_TICKS) break;
             osDelay(1);
             t++;
         }
