@@ -116,8 +116,8 @@ typedef enum { TRACK_LEFT = 0, TRACK_RIGHT } TrackingSide;
 | 상수 | 값 | 의미 |
 |---|---|---|
 | `PIVOT_SUBSTEP_TICKS` | 30 | 마이크로 피벗 1회당 엔코더 틱 (~3°) |
-| `PIVOT_SUBSTEPS_90_L` | 31 | 90° 좌회전 마이크로 피벗 횟수 (캘리브 2026-05-27 v3) |
-| `PIVOT_SUBSTEPS_90_R` | 20 | 90° 우회전 마이크로 피벗 횟수 (캘리브 2026-05-27 v3) |
+| `PIVOT_SUBSTEPS_90_L` | 25 | 90° 좌회전 마이크로 피벗 횟수 (튜닝 중) |
+| `PIVOT_SUBSTEPS_90_R` | 25 | 90° 우회전 마이크로 피벗 횟수 (캘리브 2026-05-27 v4, locked) |
 | `PIVOT_PAUSE_MS` | 10 | 마이크로 피벗 사이 정지 시간 |
 | `PIVOT_SUBSTEP_TIMEOUT_MS` | 200 | 마이크로 피벗당 안전 timeout |
 | `POST_TURN_SETTLE_MS` | 300 | 회전 후 median filter 갱신 대기 |

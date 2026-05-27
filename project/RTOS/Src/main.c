@@ -53,8 +53,8 @@
  * ticks-per-degree (motor/encoder asymmetry). Tune by 4×90° round-trip
  * calibration (CALIB_PIVOT mode); keep tick count fixed. */
 #define PIVOT_SUBSTEP_TICKS       30   /* encoder ticks per micro-pivot (~3°) */
-#define PIVOT_SUBSTEPS_90_L       31   /* micro-pivots for 90° LEFT  (calib 2026-05-27 v3) */
-#define PIVOT_SUBSTEPS_90_R       20   /* micro-pivots for 90° RIGHT (calib 2026-05-27 v3) */
+#define PIVOT_SUBSTEPS_90_L       25   /* micro-pivots for 90° LEFT  (calib 2026-05-27 v4) */
+#define PIVOT_SUBSTEPS_90_R       25   /* micro-pivots for 90° RIGHT (calib 2026-05-27 v4 - locked) */
 #define PIVOT_PAUSE_MS            10   /* brief stop between micro-pivots */
 #define PIVOT_SUBSTEP_TIMEOUT_MS  200  /* per-substep safety */
 #define POST_TURN_SETTLE_MS       300  /* let SensorTask median refresh after pivot */
@@ -614,15 +614,9 @@ void ControlTask(void *arg)
     osDelay(CTRL_WARMUP_MS);
 
 #if CALIB_PIVOT
-    /* Calibration: 4×90° right (should close 360°), pause, 4×90° left (same).
-     * Mark heading on floor before boot, compare on stop. Tune PIVOT_SUBSTEPS_90. */
+    /* Calibration: 4×90° left only (right side locked from prior calibration).
+     * Mark heading on floor before boot, compare on stop. Tune PIVOT_SUBSTEPS_90_L. */
     osDelay(1000);
-    for (int i = 0; i < 4; i++) {
-        printf("\r\n>> CALIB R %d/4", i + 1);
-        rotate_iterative(90, false);
-        osDelay(1000);
-    }
-    osDelay(2000);
     for (int i = 0; i < 4; i++) {
         printf("\r\n>> CALIB L %d/4", i + 1);
         rotate_iterative(90, true);
