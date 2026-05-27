@@ -98,22 +98,22 @@ typedef enum { TRACK_LEFT = 0, TRACK_RIGHT } TrackingSide;
 ### Distance Thresholds (cm)
 | 상수 | 값 | 역할 |
 |---|---|---|
-| `D_TARGET` | 20 | 추종 가능 벽 범위 상한 (switchTracking, has_track) |
-| `D_MIN` | 10 | 회피 트리거 (SEEK veer-off) |
+| `D_TARGET` | 8 | 추종 가능 벽 범위 상한 (switchTracking, has_track) |
+| `D_MIN` | 4 | 회피 트리거 (SEEK veer-off, ALIGN VEER) |
 | `D_OPEN` | 150 | "벽 없음" 임계 (예약, 향후 사용) |
-| `EMG_FRONT` | 9 | 정면 EMERGENCY 진입 + 회전 안전 임계 (cm) |
+| `EMG_FRONT` | 6 | 정면 EMERGENCY 진입 임계 (cm). **EMERGENCY 직접 분기 우선** — front_emerg=true 면 IR 무시하고 US 분기 (90°) |
 | `EMG_FRONT_HYST` | 2 | EMERGENCY 해제용 +cm 마진 |
-| `IR_BUMPER_THRESH` | 1000 | IR 범퍼 raw ADC 임계 — `ir_left/right > 이 값` 이면 EMERGENCY |
-| `EMERG_IR_DEG` | 30 | EMERGENCY 회전 각도 (IR 범퍼 트리거 시 — 작게 nudge) |
+| `IR_BUMPER_THRESH` | 2200 | IR 범퍼 raw ADC 임계 — `ir_left/right > 이 값` 이면 EMERGENCY (단 front 안 막혔을 때만 IR 분기) |
+| `EMERG_IR_DEG` | 45 | EMERGENCY 회전 각도 (IR 범퍼 트리거 시) |
 | `EMERG_US_DEG` | 90 | EMERGENCY 회전 각도 (초음파 정면 벽 트리거 시 — 코너 정렬) |
-| `ROTATE_VEER_DEG` | 30 | ALIGN_PROGRESS 측면 회피용 회전 각도 (`dR<D_MIN` 또는 `dL<D_MIN` 시) |
+| `ROTATE_VEER_DEG` | 20 | ALIGN_PROGRESS 측면 회피용 회전 각도 (`dR<D_MIN` 또는 `dL<D_MIN` 시) |
 | `ESCAPE_FORWARD_MS` | 250 | VEER / EMERG_IR 회전 후 강제 직진 시간 — 제자리 pivot 만으로는 트리거 zone 못 벗어나서 도리도리 함 |
 
 ### Motor PWM
 | 상수 | 값 | 의미 |
 |---|---|---|
 | `PWM_PERIOD` | 20000 | TIM4/TIM8 Auto-Reload (= 100% duty) |
-| `V_CRUISE` | 15000 | 모든 직진 듀티 (SEEK/ALIGN/NON_ALIGN 공통) |
+| `V_CRUISE` | 16000 | 모든 직진 듀티 (SEEK/ALIGN/NON_ALIGN 공통) |
 | `V_TURN` | 20000 | 피벗 회전 듀티 (full torque) |
 
 ### Iterative Pivot (회전 캘리브)

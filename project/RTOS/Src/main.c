@@ -35,18 +35,18 @@
 #define CTRL_WARMUP_MS    300
 
 /* Distance thresholds (cm) */
-#define D_TARGET          20       /* wall-follow target distance */
-#define D_MIN             10        /* lower safety bound          */
-#define D_OPEN            150       /* > D_OPEN => "no wall on this side" */
-#define EMG_FRONT         9        /* emergency front threshold (cm) */
+#define D_TARGET          8        /* wall-follow target distance */
+#define D_MIN             4        /* lower safety bound          */
+#define D_OPEN            150      /* > D_OPEN => "no wall on this side" */
+#define EMG_FRONT         6        /* emergency front threshold (cm) */
 #define EMG_FRONT_HYST    2        /* +cm margin to clear EMERGENCY */
-#define IR_BUMPER_THRESH  1000     /* raw ADC; ir_left/right ABOVE this => bumper triggered. */
-#define EMERG_IR_DEG      30       /* rotation angle when IR bumper triggers EMERGENCY (small nudge) */
-#define EMERG_US_DEG      90       /* rotation angle when front ultrasonic triggers EMERGENCY (full pivot) */
+#define IR_BUMPER_THRESH  2200     /* raw ADC; ir_left/right ABOVE this => bumper triggered. */
+#define EMERG_IR_DEG      45       /* rotation angle when IR bumper triggers EMERGENCY */
+#define EMERG_US_DEG      90       /* rotation angle when front ultrasonic triggers EMERGENCY */
 
 /* Motor PWM */
 #define PWM_PERIOD          20000
-#define V_CRUISE            15000   /* duty for all forward drive (SEEK / ALIGN / NON_ALIGN) */
+#define V_CRUISE            16000   /* duty for all forward drive (SEEK / ALIGN / NON_ALIGN) */
 #define V_TURN              20000   /* full duty for max pivot torque */
 
 /* Iterative pivot — the only rotation primitive.
@@ -74,7 +74,7 @@
 
 /* ALIGN_PROGRESS side-wall avoidance: when a side reads < D_MIN cm, stop and
  * pivot away by this many degrees (replaces the previous half-speed veer-off). */
-#define ROTATE_VEER_DEG   30
+#define ROTATE_VEER_DEG   20
 
 /* After a small pivot (VEER or IR-triggered EMERGENCY), drive forward this
  * long so the next FSM tick isn't stuck in the same trigger zone -- in-place
@@ -728,30 +728,28 @@ void ControlTask(void *arg)
             } break;
 
             case EMERGENCY: {
-                /* Pick rotation direction. IR bumper takes priority — if a side
-                 * bumper trips (lower ADC = closer), rotate AWAY from it. The
-                 * side with the LOWER reading is closer when both fire.
-                 * Otherwise fall back to front-wall reasoning:
+                /* Front-blocked (ultrasonic) ALWAYS takes priority over IR --
+                 * a wall ahead needs a full 90° pivot even if a side IR also
+                 * trips, otherwise a 45° nudge leaves the wall still in front
+                 * and the robot re-enters EMERGENCY immediately.
                  *
-                 *   no tracked wall                 -> default right turn
-                 *   both sides progressable         -> rotate so the previously-blocking
-                 *                                      front wall ends up on `side`
-                 *   only one side progressable      -> rotate that way
-                 *   none progressable (dead end)    -> default right
+                 *   front blocked (dF <= EMG_FRONT) -> US branch (90°)
+                 *     no tracked wall                 -> default right turn
+                 *     both sides progressable         -> rotate so previously-blocking
+                 *                                        front wall ends up on `side`
+                 *     only one side progressable      -> rotate that way
+                 *     none progressable (dead end)    -> default right
+                 *   else IR side bumper hit          -> IR branch (45°)
+                 *     rotate away from the hit side; if both, away from higher (closer)
                  *
                  * Commit on first entry; reuse until SEEK clears. */
                 bool first = !emerg_committed;
                 if (first) {
-                    bool ir_l_hit = (ir_left  > IR_BUMPER_THRESH);
-                    bool ir_r_hit = (ir_right > IR_BUMPER_THRESH);
+                    bool front_emerg = (dF > 0 && dF <= EMG_FRONT);
+                    bool ir_l_hit   = (ir_left  > IR_BUMPER_THRESH);
+                    bool ir_r_hit   = (ir_right > IR_BUMPER_THRESH);
 
-                    if (ir_l_hit || ir_r_hit) {
-                        emerg_turn_deg = EMERG_IR_DEG;
-                        if (ir_l_hit && ir_r_hit) emerg_turn_left = (ir_right > ir_left);  /* away from higher (closer) */
-                        else if (ir_l_hit)        emerg_turn_left = false;                  /* left bumper  -> turn RIGHT */
-                        else                      emerg_turn_left = true;                   /* right bumper -> turn LEFT  */
-                    } else {
-                        /* Front ultrasonic wall: full 90° pivot to follow new corridor. */
+                    if (front_emerg) {
                         emerg_turn_deg = EMERG_US_DEG;
                         uint8_t mask = canProgressDirection();
                         bool can_left  = (mask & DIR_LEFT)  != 0;
@@ -770,6 +768,11 @@ void ControlTask(void *arg)
                         } else {
                             emerg_turn_left = false;                     /* dead end */
                         }
+                    } else if (ir_l_hit || ir_r_hit) {
+                        emerg_turn_deg = EMERG_IR_DEG;
+                        if (ir_l_hit && ir_r_hit) emerg_turn_left = (ir_right > ir_left);  /* away from higher (closer) */
+                        else if (ir_l_hit)        emerg_turn_left = false;                  /* left bumper  -> turn RIGHT */
+                        else                      emerg_turn_left = true;                   /* right bumper -> turn LEFT  */
                     }
                     emerg_committed = true;
                 }
