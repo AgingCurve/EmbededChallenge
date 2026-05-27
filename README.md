@@ -103,6 +103,7 @@ typedef enum { TRACK_LEFT = 0, TRACK_RIGHT } TrackingSide;
 | `D_OPEN` | 150 | "벽 없음" 임계 (예약, 향후 사용) |
 | `EMG_FRONT` | 9 | 정면 EMERGENCY 진입 + 회전 안전 임계 (cm) |
 | `EMG_FRONT_HYST` | 2 | EMERGENCY 해제용 +cm 마진 |
+| `IR_BUMPER_THRESH` | 1000 | IR 범퍼 raw ADC 임계 — `ir_left/right < 이 값` 이면 EMERGENCY. **inverse sensor: 가까울수록 ADC 낮음**. baseline far ~2500-3000 |
 | `ROTATE_VEER_DEG` | 30 | ALIGN_PROGRESS 측면 회피용 회전 각도 (`dR<D_MIN` 또는 `dL<D_MIN` 시) |
 
 ### Motor PWM
