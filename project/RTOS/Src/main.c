@@ -38,7 +38,7 @@
 #define D_TARGET          20       /* wall-follow target distance */
 #define D_MIN             10        /* lower safety bound          */
 #define D_OPEN            150       /* > D_OPEN => "no wall on this side" */
-#define EMG_FRONT         20       /* emergency front threshold   */
+#define EMG_FRONT         9        /* emergency front threshold   */
 #define EMG_FRONT_HYST    2        /* +cm margin to clear EMERGENCY */
 
 /* Motor PWM */

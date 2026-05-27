@@ -101,7 +101,7 @@ typedef enum { TRACK_LEFT = 0, TRACK_RIGHT } TrackingSide;
 | `D_TARGET` | 20 | 추종 가능 벽 범위 상한 (switchTracking, has_track) |
 | `D_MIN` | 10 | 회피 트리거 (SEEK veer-off) |
 | `D_OPEN` | 150 | "벽 없음" 임계 (예약, 향후 사용) |
-| `EMG_FRONT` | 20 | 정면 EMERGENCY 진입 + 회전 안전 임계 |
+| `EMG_FRONT` | 9 | 정면 EMERGENCY 진입 + 회전 안전 임계 |
 | `EMG_FRONT_HYST` | 2 | EMERGENCY 해제용 +cm 마진 |
 
 ### Motor PWM
