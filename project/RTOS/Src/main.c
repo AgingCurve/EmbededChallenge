@@ -301,15 +301,13 @@ void IR_Task(void *arg)
         HAL_ADC_PollForConversion(&AdcHandle1, ADC_POLL_TIMEOUT);
         ir_left  = (int)HAL_ADC_GetValue(&AdcHandle1);
 
-        /* AdcHandle2 and AdcHandle3 wired as floor / right respectively (was
-         * swapped before — old code labelled ADC2=right ADC3=floor).         */
         HAL_ADC_Start(&AdcHandle2);
         HAL_ADC_PollForConversion(&AdcHandle2, ADC_POLL_TIMEOUT);
-        ir_floor = (int)HAL_ADC_GetValue(&AdcHandle2);
+        ir_right = (int)HAL_ADC_GetValue(&AdcHandle2);
 
         HAL_ADC_Start(&AdcHandle3);
         HAL_ADC_PollForConversion(&AdcHandle3, ADC_POLL_TIMEOUT);
-        ir_right = (int)HAL_ADC_GetValue(&AdcHandle3);
+        ir_floor = (int)HAL_ADC_GetValue(&AdcHandle3);
 
         osDelay(IR_PERIOD_MS);
         printf("\r\n[IR_Bumping]Left : %d, Right : %d", ir_left, ir_right);
