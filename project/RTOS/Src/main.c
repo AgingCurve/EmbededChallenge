@@ -77,6 +77,13 @@
  * pivot away by this many degrees (replaces the previous half-speed veer-off). */
 #define ROTATE_VEER_DEG   30
 
+/* After a small pivot (VEER or IR-triggered EMERGENCY), drive forward this
+ * long so the next FSM tick isn't stuck in the same trigger zone -- in-place
+ * pivots don't change position, so the trigger condition recurs without a
+ * forward step. Large enough to clear sensor range, small enough to avoid
+ * blowing past a new obstacle. */
+#define ESCAPE_FORWARD_MS 250
+
 /* Pivot calibration mode — when 1, ControlTask skips the FSM and runs a
  * 4x90° round-trip (right then left) so PIVOT_SUBSTEPS_90 can be measured
  * against floor markings. Set to 0 for normal driving. */
@@ -685,17 +692,23 @@ void ControlTask(void *arg)
                     break;
                 }
 
-                /* Side-wall avoidance: stop and pivot away decisively (no smooth veer). */
+                /* Side-wall avoidance: stop, pivot away, then drive forward briefly so
+                 * the next tick isn't stuck in the same trigger zone (in-place pivots
+                 * don't change position, so dR<D_MIN would recur indefinitely). */
                 if (dR > 0 && dR < D_MIN) {
                     printf("\r\n>> VEER L deg=%d dR=%d", ROTATE_VEER_DEG, dR);
                     Motor_Stop();
                     osDelay(50);
                     rotate_iterative(ROTATE_VEER_DEG, true);   /* R wall close -> pivot LEFT */
+                    Motor_Drive(V_CRUISE, V_CRUISE);
+                    osDelay(ESCAPE_FORWARD_MS);
                 } else if (dL > 0 && dL < D_MIN) {
                     printf("\r\n>> VEER R deg=%d dL=%d", ROTATE_VEER_DEG, dL);
                     Motor_Stop();
                     osDelay(50);
                     rotate_iterative(ROTATE_VEER_DEG, false);  /* L wall close -> pivot RIGHT */
+                    Motor_Drive(V_CRUISE, V_CRUISE);
+                    osDelay(ESCAPE_FORWARD_MS);
                 } else {
                     Motor_Drive(V_CRUISE, V_CRUISE);
                 }
@@ -765,6 +778,13 @@ void ControlTask(void *arg)
                 Motor_Stop();
                 osDelay(50);
                 rotate_iterative(emerg_turn_deg, emerg_turn_left);
+                /* IR-triggered EMERGENCY uses a small rotation (30°) that often
+                 * leaves the robot still inside the trigger zone; add a brief
+                 * forward escape to break the loop. US (90°) doesn't need it. */
+                if (emerg_turn_deg == EMERG_IR_DEG) {
+                    Motor_Drive(V_CRUISE, V_CRUISE);
+                    osDelay(ESCAPE_FORWARD_MS);
+                }
                 state = SEEK;
             } break;
         }

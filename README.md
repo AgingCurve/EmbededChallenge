@@ -107,6 +107,7 @@ typedef enum { TRACK_LEFT = 0, TRACK_RIGHT } TrackingSide;
 | `EMERG_IR_DEG` | 30 | EMERGENCY 회전 각도 (IR 범퍼 트리거 시 — 작게 nudge) |
 | `EMERG_US_DEG` | 90 | EMERGENCY 회전 각도 (초음파 정면 벽 트리거 시 — 코너 정렬) |
 | `ROTATE_VEER_DEG` | 30 | ALIGN_PROGRESS 측면 회피용 회전 각도 (`dR<D_MIN` 또는 `dL<D_MIN` 시) |
+| `ESCAPE_FORWARD_MS` | 250 | VEER / EMERG_IR 회전 후 강제 직진 시간 — 제자리 pivot 만으로는 트리거 zone 못 벗어나서 도리도리 함 |
 
 ### Motor PWM
 | 상수 | 값 | 의미 |
