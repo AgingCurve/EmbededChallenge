@@ -42,6 +42,8 @@
 #define EMG_FRONT_HYST    2        /* +cm margin to clear EMERGENCY */
 #define IR_BUMPER_THRESH  1000     /* raw ADC; ir_left/right BELOW this => bumper triggered.
                                     * Sensor is inverse (closer = lower ADC). Baseline far ~2500-3000. */
+#define EMERG_IR_DEG      30       /* rotation angle when IR bumper triggers EMERGENCY (small nudge) */
+#define EMERG_US_DEG      90       /* rotation angle when front ultrasonic triggers EMERGENCY (full pivot) */
 
 /* Motor PWM */
 #define PWM_PERIOD          20000
@@ -139,6 +141,7 @@ TrackingSide side  = TRACK_RIGHT;
 /* EMERGENCY commit state: lock turn direction until SEEK is stable for a while */
 static bool emerg_committed = false;
 static bool emerg_turn_left = false;
+static int  emerg_turn_deg  = EMERG_US_DEG;   /* committed rotation magnitude */
 static int  seek_clear_ticks = 0;
 #define EMERG_RELEASE_TICKS  25     /* ~500ms of clear SEEK -> release commit */
 
@@ -727,10 +730,14 @@ void ControlTask(void *arg)
                     bool ir_r_hit = (ir_right > 0 && ir_right < IR_BUMPER_THRESH);
 
                     if (ir_l_hit || ir_r_hit) {
+                        /* IR bumper: small nudge (sensors near front corners). */
+                        emerg_turn_deg = EMERG_IR_DEG;
                         if (ir_l_hit && ir_r_hit) emerg_turn_left = (ir_right < ir_left);  /* both: away from lower (closer) */
                         else if (ir_l_hit)        emerg_turn_left = false;                 /* left bumper  -> turn right */
                         else                      emerg_turn_left = true;                  /* right bumper -> turn left  */
                     } else {
+                        /* Front ultrasonic wall: full 90° pivot to follow new corridor. */
+                        emerg_turn_deg = EMERG_US_DEG;
                         uint8_t mask = canProgressDirection();
                         bool can_left  = (mask & DIR_LEFT)  != 0;
                         bool can_right = (mask & DIR_RIGHT) != 0;
@@ -752,12 +759,12 @@ void ControlTask(void *arg)
                     emerg_committed = true;
                 }
                 seek_clear_ticks = 0;
-                printf("\r\n>> EMERG %s commit=%s dF=%d dL=%d dR=%d ir(L/R)=%d/%d",
-                       emerg_turn_left ? "LEFT" : "RIGHT",
+                printf("\r\n>> EMERG %s deg=%d commit=%s dF=%d dL=%d dR=%d ir(L/R)=%d/%d",
+                       emerg_turn_left ? "LEFT" : "RIGHT", emerg_turn_deg,
                        first ? "NEW" : "KEEP", dF, dL, dR, ir_left, ir_right);
                 Motor_Stop();
                 osDelay(50);
-                rotate_iterative(90, emerg_turn_left);
+                rotate_iterative(emerg_turn_deg, emerg_turn_left);
                 state = SEEK;
             } break;
         }
