@@ -40,7 +40,9 @@
 #define D_OPEN            150       /* > D_OPEN => "no wall on this side" */
 #define EMG_FRONT         9        /* emergency front threshold (cm) */
 #define EMG_FRONT_HYST    2        /* +cm margin to clear EMERGENCY */
-#define IR_BUMPER_THRESH  70       /* raw ADC; ir_left/right > this => bumper triggered */
+#define IR_BUMPER_THRESH  1500     /* raw ADC; ir_left/right > this => bumper triggered.
+                                    * Tuned from demo log: idle/noise floor is 30-500,
+                                    * genuine close-contact readings hit 1500-2600+. */
 
 /* Motor PWM */
 #define PWM_PERIOD          20000

@@ -103,7 +103,7 @@ typedef enum { TRACK_LEFT = 0, TRACK_RIGHT } TrackingSide;
 | `D_OPEN` | 150 | "벽 없음" 임계 (예약, 향후 사용) |
 | `EMG_FRONT` | 9 | 정면 EMERGENCY 진입 + 회전 안전 임계 (cm) |
 | `EMG_FRONT_HYST` | 2 | EMERGENCY 해제용 +cm 마진 |
-| `IR_BUMPER_THRESH` | 70 | IR 범퍼 raw ADC 트리거 임계 — `ir_left/right > 이 값` 이면 EMERGENCY |
+| `IR_BUMPER_THRESH` | 1500 | IR 범퍼 raw ADC 트리거 임계 — `ir_left/right > 이 값` 이면 EMERGENCY. 노이즈 floor 30-500, 진짜 근접 1500-2600+ 기준 튜닝 |
 
 ### Motor PWM
 | 상수 | 값 | 의미 |
