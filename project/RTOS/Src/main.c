@@ -30,6 +30,7 @@
 #define CTRL_PERIOD_MS    20
 #define SENS_PERIOD_MS    20
 #define IR_PERIOD_MS      20
+#define DBG_PERIOD_MS     500       /* DebugTask periodic snapshot cadence */
 #define TASK_WARMUP_MS    200
 #define CTRL_WARMUP_MS    300
 
@@ -137,6 +138,9 @@ void angleHistoryFlush(void);
 void SensorTask(void *arg);
 void IR_Task(void *arg);
 
+/* Debug */
+void DebugTask(void *arg);
+
 /* Control */
 void    Motor_Drive(int v_left, int v_right);
 void    Motor_Stop(void);
@@ -157,6 +161,11 @@ void    ControlTask(void *arg);
 #else
   #define PUTCHAR_PROTOTYPE int fputc(int ch, FILE *f)
 #endif
+/**
+ * @brief  Redirects single-character stdio output to UART1 so printf works.
+ * @param  ch  Character to emit (passed by stdio runtime).
+ * @return The same character, as expected by stdio.
+ */
 PUTCHAR_PROTOTYPE
 {
     HAL_UART_Transmit(&UartHandle1, (uint8_t *)&ch, 1, 0xFFFF);
@@ -168,6 +177,12 @@ PUTCHAR_PROTOTYPE
  *  7-sample window per signal -> filtered value (median) + confidence (stddev).
  *  Rate of change is derived from (d* - d*_prev).
  * =========================================================================== */
+
+/**
+ * @brief  Returns the median of SAMPLE_N (=7) integers via insertion sort.
+ * @param  a  Pointer to the sliding-window buffer (SAMPLE_N entries).
+ * @return The middle element after sorting a local copy (input is untouched).
+ */
 int median7(int *a)
 {
     int tmp[SAMPLE_N];
@@ -180,6 +195,11 @@ int median7(int *a)
     return tmp[SAMPLE_N / 2];
 }
 
+/**
+ * @brief  Integer-only standard deviation of SAMPLE_N (=7) samples.
+ * @param  a  Pointer to the sliding-window buffer.
+ * @return floor(sqrt(variance)); used as a per-sensor noise/confidence proxy.
+ */
 int stddev7(int *a)
 {
     long sum = 0;
@@ -196,14 +216,26 @@ int stddev7(int *a)
     return s;
 }
 
-/* Flush angle-correction history. Called by switchTracking() on side change
- * and by angleAdjusting() after a corrective rotation invalidates the past. */
+/**
+ * @brief  Resets the angle-correction ring buffer to "warming up" state.
+ * @note   Called whenever past samples become semantically invalid:
+ *         after rotate_iterative() (heading changed) or on side switch.
+ *         Forces angleCalculate() to return 0 until N fresh samples are pushed.
+ */
 void angleHistoryFlush(void)
 {
     hist_idx   = 0;
     hist_count = 0;
 }
 
+/**
+ * @brief  RTOS task — samples HC-SR04 trio, filters them, feeds the angle buffer.
+ * @param  arg  Unused (FreeRTOS task signature).
+ * @note   Period = SENS_PERIOD_MS. Each tick: shifts US_TICKS_PER_CM-scaled
+ *         raw IC diffs into ring buffers, recomputes (dF, dL, dR) via median7
+ *         and (sF, sL, sR) via stddev7, then pushes the filtered triple into
+ *         the arctan history buffer (hist_d*).
+ */
 void SensorTask(void *arg)
 {
     (void)arg;
@@ -236,6 +268,12 @@ void SensorTask(void *arg)
 /* ===========================================================================
  *  Sensing Layer — IR_Task
  * =========================================================================== */
+/**
+ * @brief  RTOS task — polls the three IR ADC channels (left, right, floor).
+ * @param  arg  Unused (FreeRTOS task signature).
+ * @note   Period = IR_PERIOD_MS. Stores raw 12-bit ADC values into
+ *         ir_left/ir_right/ir_floor for ControlTask diagnostics.
+ */
 void IR_Task(void *arg)
 {
     (void)arg;
@@ -259,10 +297,71 @@ void IR_Task(void *arg)
 }
 
 /* ===========================================================================
+ *  Debug Layer — DebugTask
+ *  Two outputs:
+ *    1) Edge log on every FSM state transition (printed once per change).
+ *    2) Periodic snapshot every DBG_PERIOD_MS with distances, stddev, side,
+ *       emergency-commit info, and IR readings.
+ *  Lowest priority so it never starves Sensor/IR/Control.
+ * =========================================================================== */
+void DebugTask(void *arg)
+{
+    (void)arg;
+    static const char *state_name[] = {
+        "INIT", "SEEK", "ALIGN_PROG", "NON_ALIGN_PROG", "EMERGENCY"
+    };
+    DriveState prev_state = (DriveState)0xFF;   /* force first-tick edge log */
+    TrackingSide prev_side = side;
+    uint32_t tick = 0;
+
+    osDelay(TASK_WARMUP_MS);
+    for (;;) {
+        if (state != prev_state) {
+            printf("\r\n[DBG-EDGE] %s -> %s  dF=%d dL=%d dR=%d side=%s",
+                   (prev_state == (DriveState)0xFF) ? "?" : state_name[prev_state],
+                   state_name[state],
+                   dF, dL, dR,
+                   side == TRACK_RIGHT ? "R" : "L");
+            prev_state = state;
+        }
+        if (side != prev_side) {
+            printf("\r\n[DBG-SIDE] %s -> %s",
+                   prev_side == TRACK_RIGHT ? "R" : "L",
+                   side      == TRACK_RIGHT ? "R" : "L");
+            prev_side = side;
+        }
+
+        printf("\r\n[DBG #%lu] st=%s side=%s "
+               "d(F/L/R)=%d/%d/%d s(F/L/R)=%d/%d/%d "
+               "emg=%c commit=%c hist=%d ir(L/R/F)=%d/%d/%d",
+               (unsigned long)tick++,
+               state_name[state],
+               side == TRACK_RIGHT ? "R" : "L",
+               dF, dL, dR,
+               sF, sL, sR,
+               isEmergency() ? '1' : '0',
+               emerg_committed ? (emerg_turn_left ? 'L' : 'R') : '-',
+               hist_count,
+               ir_left, ir_right, ir_floor);
+
+        osDelay(DBG_PERIOD_MS);
+    }
+}
+
+/* ===========================================================================
  *  Motor Layer
  *  v_left / v_right ∈ [-PWM_PERIOD, +PWM_PERIOD].  Sign = direction.
  *  TIM8 drives right motor (CH1=fwd, CH2=rev); TIM4 drives left (CH2=fwd, CH1=rev).
  * =========================================================================== */
+
+/**
+ * @brief  Sets PWM duty on both motors; sign encodes direction.
+ * @param  v_left   Signed duty for left  wheel; positive = forward.
+ * @param  v_right  Signed duty for right wheel; positive = forward.
+ * @note   Magnitudes are clamped to PWM_PERIOD. Idle channel gets CCR=0 (PWM1
+ *         mode outputs LOW), the active channel gets |v|. Channels are pre-
+ *         started in main(); this function only updates compare registers.
+ */
 void Motor_Drive(int v_left, int v_right)
 {
     /* PWM channels are pre-started in main(); we just gate by CCR.
@@ -281,19 +380,28 @@ void Motor_Drive(int v_left, int v_right)
     else              { TIM4->CCR2 = 0;  TIM4->CCR1 = aL; }
 }
 
+/**
+ * @brief  Coasts the robot — both motors get zero duty without disabling PWM.
+ * @note   Uses Motor_Drive(0, 0) so the PWM channels stay enabled and the
+ *         next non-zero call takes effect immediately. HAL_TIM_PWM_Stop()
+ *         would have to be matched by a Start() and is intentionally avoided.
+ */
 void Motor_Stop(void)
 {
-    /* Keep PWM channels running; just zero the duty so motor coasts.
-     * (HAL_TIM_PWM_Stop would disable the channel and subsequent
-     *  Motor_Drive(CCR=..) writes would produce no output.) */
     Motor_Drive(0, 0);
 }
 
-/* Iterative encoder-based pivot (term_code.c pattern).
- *   N micro-pivots of M ticks each = `degrees` total.
- *   Each micro-pivot: stop, reset encoder, drive until ticks reached, stop.
- *   Uses the wheel that goes FORWARD for this pivot direction
- *   (avoids quadrature sign issues; matches term_code's turnLeft/turnRight). */
+/**
+ * @brief  Closed-loop in-place pivot driven by encoder ticks, in micro-steps.
+ * @param  degrees  Magnitude of rotation in degrees (positive).
+ * @param  left     true => pivot CCW (left turn); false => pivot CW (right).
+ * @note   Decomposes the turn into `PIVOT_SUBSTEPS_90 * degrees / 90`
+ *         micro-pivots, each consuming PIVOT_SUBSTEP_TICKS ticks on the wheel
+ *         that goes forward for this direction. Stops between micro-steps to
+ *         null out inertia. Settles POST_TURN_SETTLE_MS so the median filter
+ *         refreshes, then calls angleHistoryFlush() — every rotation
+ *         invalidates the arctan ring buffer's heading assumption.
+ */
 void rotate_iterative(int degrees, bool left)
 {
     int substeps = (PIVOT_SUBSTEPS_90 * degrees) / 90;
@@ -328,11 +436,15 @@ void rotate_iterative(int degrees, bool left)
  *  Control Layer — helpers
  * =========================================================================== */
 
-/* Dynamic wall tracking — sticky policy:
- *   - if the current side still reads a wall (0 < d <= D_TARGET): keep it
- *   - else if the opposite side reads a wall: swap to it (flush history)
- *   - else: leave `side` unchanged; caller demotes FSM to NON_ALIGN
- * Returns true when a usable tracked wall is in place after the call. */
+/**
+ * @brief  Sticky dynamic wall tracking — only swaps `side` when current is lost.
+ * @return true if a usable tracked wall is in place after the call,
+ *         false if both sides lack a wall within D_TARGET.
+ * @note   Sticky policy: a working track is never preempted. If the current
+ *         side fails but the opposite side has a wall, `side` flips and the
+ *         angle history is flushed (the heading-relative correlation we were
+ *         tracking is now against a different wall).
+ */
 bool switchTracking(void)
 {
     bool cur_ok, alt_ok;
@@ -357,19 +469,21 @@ bool switchTracking(void)
  * Consumed by angleAdjusting() to pick rotation direction. */
 static TrackingSide angle_source = TRACK_RIGHT;
 
-/* Heading angle from whichever side wall is currently measurable.
- * Independent of `side` (tracking is policy; angle source is sensing).
- *
- * README's natural per-wall sign convention — NOT artificially unified:
- *   theta from dR > 0  =>  tilted toward RIGHT wall  =>  rotate LEFT
- *   theta from dL > 0  =>  tilted toward LEFT  wall  =>  rotate RIGHT
- *
- *   tan(theta_R) = (dR_old - dR_new) / (dF_old - dF_new)
- *   tan(theta_L) = (dL_old - dL_new) / (dF_old - dF_new)
- *
- * Returns 0 (skip) when buffer not warm, |ΔdF| < MIN_DF_DELTA_CM, or no usable
- * side reading on both current AND oldest sample. On non-zero return,
- * `angle_source` holds the sensor used. */
+/**
+ * @brief  Heading deviation in degrees, derived by arctan over a 200ms window.
+ * @return Signed degrees; 0 means "skip correction this tick". Sign is
+ *         per-wall (NOT unified): from R sensor, +deg => tilted toward right
+ *         wall; from L sensor, +deg => tilted toward left wall. The source
+ *         sensor of a non-zero result is left in `angle_source` for the
+ *         caller (angleAdjusting) to interpret.
+ * @note   Independent of `side` — picks dR first if both current and oldest
+ *         dR samples are valid; falls back to dL otherwise. Returns 0 when
+ *         the ring buffer isn't warm yet, |ΔdF| < MIN_DF_DELTA_CM (robot
+ *         essentially stationary / no front motion to differentiate), or
+ *         neither side has paired valid samples.
+ *           tan(θ_R) = (dR_old - dR_new) / (dF_old - dF_new)
+ *           tan(θ_L) = (dL_old - dL_new) / (dF_old - dF_new)
+ */
 int angleCalculate(void)
 {
     if (hist_count < ANGLE_HISTORY_N) return 0;
@@ -399,13 +513,14 @@ int angleCalculate(void)
     return (int)(theta_rad * 57.2957795f);   /* rad -> deg */
 }
 
-/* Event-driven angle correction.
- *   |theta| < ANGLE_CORRECT_DEG  -> straight cruise (most ticks)
- *   |theta| >= ANGLE_CORRECT_DEG -> stop, pivot by |theta|, flush history
- *
- * Per-wall sign interpretation (no artificial unification):
- *   source = R, theta > 0  =>  tilted toward right wall  =>  rotate LEFT
- *   source = L, theta > 0  =>  tilted toward left  wall  =>  rotate RIGHT */
+/**
+ * @brief  Event-driven heading correction — runs once per ALIGN_PROGRESS tick.
+ * @note   |θ| < ANGLE_CORRECT_DEG  =>  straight cruise at V_CRUISE (most ticks).
+ *         |θ| >= ANGLE_CORRECT_DEG =>  stop, in-place pivot by |θ|, then resume
+ *         (rotate_iterative auto-flushes the history). Rotation direction is
+ *         picked from `angle_source` so the per-wall sign convention from
+ *         angleCalculate() is interpreted correctly.
+ */
 void angleAdjusting(void)
 {
     int deg = angleCalculate();
@@ -426,10 +541,13 @@ void angleAdjusting(void)
     rotate_iterative(mag, turn_left);
 }
 
-/* Bitmask of directions that won't immediately re-enter EMERGENCY if taken.
- *   bit set => after rotating/proceeding that way, new front >= EMG_FRONT
- *   The EMG_FRONT (not D_TARGET) threshold matters: side reading > EMG_FRONT is
- *   "safe to turn into" regardless of whether it's within tracking range. */
+/**
+ * @brief  Bitmask of directions safe to take/turn into right now.
+ * @return OR of DIR_FORWARD / DIR_LEFT / DIR_RIGHT bits; set means safe.
+ * @note   "Safe" = the corresponding sensor either sees nothing (==0) or
+ *         reads a distance > EMG_FRONT. Used in EMERGENCY to pick which
+ *         way to rotate so the robot doesn't immediately re-enter EMERGENCY.
+ */
 uint8_t canProgressDirection(void)
 {
     uint8_t mask = 0;
@@ -439,12 +557,20 @@ uint8_t canProgressDirection(void)
     return mask;
 }
 
+/**
+ * @brief  True when a forward obstacle is close enough to require evasion.
+ * @return dF in (0, EMG_FRONT] — front ultrasonic only (floor IR unwired).
+ */
 bool isEmergency(void)
 {
-    /* Floor IR not wired on this build -> rely on front ultrasonic only. */
     return (dF > 0 && dF <= EMG_FRONT);
 }
 
+/**
+ * @brief  True when the front has cleared past the hysteresis threshold.
+ * @return dF > EMG_FRONT + EMG_FRONT_HYST. Used to release EMERGENCY commit
+ *         once the robot is solidly back into safe territory.
+ */
 bool emergencyResolved(void)
 {
     return (dF > EMG_FRONT + EMG_FRONT_HYST);
@@ -453,6 +579,15 @@ bool emergencyResolved(void)
 /* ===========================================================================
  *  Control Layer — FSM
  * =========================================================================== */
+/**
+ * @brief  RTOS task — runs the 5-state drive FSM each CTRL_PERIOD_MS.
+ * @param  arg  Unused (FreeRTOS task signature).
+ * @note   States: INIT -> SEEK -> ALIGN_PROGRESS <-> NON_ALIGN_PROGRESS;
+ *         EMERGENCY preempts any state when isEmergency() trips and returns
+ *         to SEEK after a committed 90° rotate_iterative(). ALIGN_PROGRESS
+ *         is the only state that calls angleAdjusting(). LED1 toggles every
+ *         ~500ms and a diagnostic line is printed at the same cadence.
+ */
 void ControlTask(void *arg)
 {
     (void)arg;
@@ -555,6 +690,14 @@ void ControlTask(void *arg)
 /* ===========================================================================
  *  main
  * =========================================================================== */
+/**
+ * @brief  System entry point: brings up peripherals, then launches the RTOS.
+ * @return Never returns in normal operation. If vTaskStartScheduler() falls
+ *         through, LED2 lights solid as a fault indicator and the loop spins.
+ * @note   Init order: HAL_Init -> SystemClock_Config -> UART/LED -> motor PWM
+ *         (TIM8/TIM4) -> EXTI (encoders) -> ultrasonic IC (TIM3) + trigger
+ *         (TIM10) -> three ADCs for IR -> task creation -> scheduler start.
+ */
 int main(void)
 {
     GPIO_InitTypeDef GPIO_InitStruct;
@@ -713,6 +856,7 @@ int main(void)
     xTaskCreate(SensorTask,  "sensor",   512, NULL, 3, NULL);
     xTaskCreate(IR_Task,     "ir",       512, NULL, 3, NULL);
     xTaskCreate(ControlTask, "control", 1024, NULL, 2, NULL);
+    xTaskCreate(DebugTask,   "debug",    512, NULL, 1, NULL);
     vTaskStartScheduler();
 
     /* Only reached if scheduler failed -> LED2 solid ON as fault marker */
@@ -723,6 +867,11 @@ int main(void)
 /* ===========================================================================
  *  System clock
  * =========================================================================== */
+/**
+ * @brief  Configures HSE+PLL clock tree to 180MHz with overdrive.
+ * @note   PLL: HSE / 25 * 360 / 2 = 180MHz SYSCLK. AHB=180, APB1=45, APB2=90.
+ *         Flash latency set to 5 wait states for 180MHz operation.
+ */
 static void SystemClock_Config(void)
 {
     RCC_ClkInitTypeDef RCC_ClkInitStruct;
@@ -752,6 +901,12 @@ static void SystemClock_Config(void)
 }
 
 #ifdef USE_FULL_ASSERT
+/**
+ * @brief  HAL assert hook used when USE_FULL_ASSERT is defined.
+ * @param  file  Source file where the assert tripped (unused).
+ * @param  line  Line number of the failing assert (unused).
+ * @note   Currently traps in an infinite loop without logging.
+ */
 void assert_failed(uint8_t *file, uint32_t line)
 {
     (void)file; (void)line;
@@ -762,6 +917,13 @@ void assert_failed(uint8_t *file, uint32_t line)
 /* ===========================================================================
  *  ISR callbacks
  * =========================================================================== */
+/**
+ * @brief  EXTI ISR — increments encoder counters from quadrature edges.
+ * @param  GPIO_Pin  Pin that triggered the EXTI (PA15 = right, PB4 = left).
+ * @note   Reads the partner pin (PB3 / PB5) to decide direction. Counter
+ *         increments on logic-0 partner, decrements on logic-1. `READY` is
+ *         the sentinel between edges so transient reads don't double-count.
+ */
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
     switch (GPIO_Pin) {
@@ -778,6 +940,14 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
     }
 }
 
+/**
+ * @brief  TIM input-capture ISR — measures HC-SR04 echo pulse widths on TIM3.
+ * @param  htim  HAL timer handle; only TIM3 is handled here.
+ * @note   Each of CH2 (right), CH3 (front), CH4 (left) toggles capture
+ *         polarity on every edge. Pulse width = falling - rising, with
+ *         16-bit wraparound handled inline. Result feeds uwDiffCapture1/2/3
+ *         consumed by SensorTask (divided by US_TICKS_PER_CM for cm).
+ */
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
 {
     if (htim->Instance != TIM3) return;
@@ -820,12 +990,22 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
     }
 }
 
+/**
+ * @brief  Fatal-error trap — lights LED3 and stops forward progress.
+ * @note   Called when an HAL init routine returns HAL_ERROR. No recovery.
+ */
 static void Error_Handler(void)
 {
     BSP_LED_On(LED3);
     while (1) { }
 }
 
+/**
+ * @brief  Wires up the encoder EXTI lines (PA15, PB3/4/5) and enables NVIC.
+ * @note   PA15 -> EXTI15_10 (right encoder edge). PB4 -> EXTI4 (left encoder
+ *         edge). PB3/PB5 are partner pins read inside the EXTI callback to
+ *         determine rotation direction. All set to rising-edge interrupts.
+ */
 static void EXTILine_Config(void)
 {
     GPIO_InitTypeDef GPIO_InitStructure;
