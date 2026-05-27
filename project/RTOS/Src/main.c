@@ -744,13 +744,12 @@ void ControlTask(void *arg)
                     bool ir_r_hit = (ir_right > 0 && ir_right < IR_BUMPER_THRESH);
 
                     if (ir_l_hit || ir_r_hit) {
-                        /* IR bumper: small nudge (sensors near front corners).
-                         * Inverse sensor (lower = closer): when both hit, the
-                         * side with the LOWER reading is closer -> away from it. */
+                        /* IR bumper: flipped from naive "away" -- empirically the
+                         * robot was rotating toward the obstacle, so invert. */
                         emerg_turn_deg = EMERG_IR_DEG;
-                        if (ir_l_hit && ir_r_hit) emerg_turn_left = (ir_right < ir_left);  /* both: away from lower (closer) */
-                        else if (ir_l_hit)        emerg_turn_left = false;                 /* left bumper  -> turn right */
-                        else                      emerg_turn_left = true;                  /* right bumper -> turn left  */
+                        if (ir_l_hit && ir_r_hit) emerg_turn_left = (ir_right > ir_left);
+                        else if (ir_l_hit)        emerg_turn_left = true;
+                        else                      emerg_turn_left = false;
                     } else {
                         /* Front ultrasonic wall: full 90° pivot to follow new corridor. */
                         emerg_turn_deg = EMERG_US_DEG;
