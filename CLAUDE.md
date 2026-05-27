@@ -94,8 +94,12 @@ ControlTask 는 300 ms warm-up 후 시작 (Sensor/IR 은 200 ms).
 
 - **공유 타입** (FSM enum, `DIR_*`, `READY`): `project/RTOS/Inc/main.h`
 - **튜닝 상수 전부** (`D_TARGET`, `EMG_FRONT`, `PIVOT_*`, `ANGLE_*`, PWM duty …): `project/RTOS/Src/main.c` 상단 *Calibration / tunables* 블록
+- **캘리브 모드**: `CALIB_PIVOT` 매크로 (0/1) — 1이면 ControlTask 가 FSM 대신 4×90° 회전 시퀀스만 돌리고 정지. 일반 주행 시엔 반드시 0.
 
 상수를 추가하거나 의미를 바꾸면 **README의 상수 표도 같이 업데이트**해야 합니다. 둘이 어긋나면 사람이 헷갈립니다.
+
+### Pivot 캘리브 결과 (2026-05-27)
+좌/우 회전이 **비대칭**으로 확정됨 (`PIVOT_SUBSTEPS_90_L = 24`, `PIVOT_SUBSTEPS_90_R = 25`). 모터/엔코더 polarity + 차동구동 미러 때문에 단일 상수로는 양쪽 90° 못 맞춥니다. 향후 모터/바퀴 교체 시 `CALIB_PIVOT` 모드로 재측정 필요. **측정 노이즈 큼** — run-to-run 으로 ±10° 변동 흔함 (배터리 전압/모터 열). 한 자리수 °의 잔여 오차는 `angleAdjusting()` 이 직진 중 보정한다는 전제.
 
 ---
 

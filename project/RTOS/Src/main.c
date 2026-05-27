@@ -53,8 +53,8 @@
  * ticks-per-degree (motor/encoder asymmetry). Tune by 4×90° round-trip
  * calibration (CALIB_PIVOT mode); keep tick count fixed. */
 #define PIVOT_SUBSTEP_TICKS       30   /* encoder ticks per micro-pivot (~3°) */
-#define PIVOT_SUBSTEPS_90_L       25   /* micro-pivots for 90° LEFT  (calib 2026-05-27 v4) */
-#define PIVOT_SUBSTEPS_90_R       25   /* micro-pivots for 90° RIGHT (calib 2026-05-27 v4 - locked) */
+#define PIVOT_SUBSTEPS_90_L       24   /* micro-pivots for 90° LEFT  (calib 2026-05-27 final) */
+#define PIVOT_SUBSTEPS_90_R       25   /* micro-pivots for 90° RIGHT (calib 2026-05-27 final) */
 #define PIVOT_PAUSE_MS            10   /* brief stop between micro-pivots */
 #define PIVOT_SUBSTEP_TIMEOUT_MS  200  /* per-substep safety */
 #define POST_TURN_SETTLE_MS       300  /* let SensorTask median refresh after pivot */
@@ -73,7 +73,7 @@
 /* Pivot calibration mode — when 1, ControlTask skips the FSM and runs a
  * 4x90° round-trip (right then left) so PIVOT_SUBSTEPS_90 can be measured
  * against floor markings. Set to 0 for normal driving. */
-#define CALIB_PIVOT       1
+#define CALIB_PIVOT       0
 
 /* ===========================================================================
  *  Peripherals
