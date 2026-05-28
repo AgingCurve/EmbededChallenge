@@ -16,6 +16,7 @@
 #include "main.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include "cmsis_os.h"
 
 /* ===========================================================================
@@ -29,37 +30,73 @@
 #define CTRL_PERIOD_MS    20
 #define SENS_PERIOD_MS    20
 #define IR_PERIOD_MS      20
+#define DBG_PERIOD_MS     500       /* DebugTask periodic snapshot cadence */
 #define TASK_WARMUP_MS    200
 #define CTRL_WARMUP_MS    300
 
 /* Distance thresholds (cm) */
-#define D_TARGET          15       /* wall-follow target distance */
-#define D_MIN             8        /* lower safety bound          */
-#define EMG_FRONT         20        /* emergency front threshold   */
+#define D_TARGET          8        /* wall-follow target distance */
+#define D_MIN             4        /* lower safety bound          */
+#define D_OPEN            150      /* > D_OPEN => "no wall on this side" */
+#define EMG_FRONT         8        /* emergency front threshold (cm) */
 #define EMG_FRONT_HYST    2        /* +cm margin to clear EMERGENCY */
+#define IR_BUMPER_THRESH  2100     /* raw ADC; ir_left/right ABOVE this => bumper triggered. */
+#define EMERG_IR_DEG      30       /* rotation angle when IR bumper triggers EMERGENCY */
+#define EMERG_US_DEG      90       /* rotation angle when front ultrasonic triggers EMERGENCY */
 
 /* Motor PWM */
 #define PWM_PERIOD          20000
-#define V_CRUISE            20000   /* duty for SEEK forward drive */
+#define V_CRUISE            16000   /* duty for all forward drive (SEEK / ALIGN / NON_ALIGN) */
+#define V_TRIM_L            1000    /* extra duty on LEFT wheel for straight-line drift trim
+                                     * (motors/wheels asymmetric -- same duty != same speed). */
 #define V_TURN              20000   /* full duty for max pivot torque */
-#define TURN_90_MS          500     /* legacy time-based rotate(), unused */
 
-/* Encoder-based rotation (used by EMERGENCY) */
-#define TICKS_PER_90        900     /* right-encoder ticks for 90° (continuous, unused) */
-#define ROTATE_TIMEOUT_MS   4000    /* safety: bail if encoder stalls */
-#define POST_TURN_SETTLE_MS 300     /* let SensorTask median refresh after pivot */
-
-/* Iterative pivot (term_code style) — used by EMERGENCY */
+/* Iterative pivot — the only rotation primitive.
+ * 90° = PIVOT_SUBSTEPS_90_x × PIVOT_SUBSTEP_TICKS encoder ticks total.
+ * L/R split because the two wheels have slightly different effective
+ * ticks-per-degree (motor/encoder asymmetry). Tune by 4×90° round-trip
+ * calibration (CALIB_PIVOT mode); keep tick count fixed. */
 #define PIVOT_SUBSTEP_TICKS       30   /* encoder ticks per micro-pivot (~3°) */
-#define PIVOT_SUBSTEPS_90         30   /* number of micro-pivots for 90° */
+#define PIVOT_SUBSTEPS_90_L       24   /* micro-pivots for 90° LEFT  (calib 2026-05-27 final) */
+#define PIVOT_SUBSTEPS_90_R       25   /* micro-pivots for 90° RIGHT (calib 2026-05-27 final) */
 #define PIVOT_PAUSE_MS            10   /* brief stop between micro-pivots */
 #define PIVOT_SUBSTEP_TIMEOUT_MS  200  /* per-substep safety */
+#define POST_TURN_SETTLE_MS       300  /* let SensorTask median refresh after pivot */
+
+/* Angle correction (arctan-based, event-driven via rotate_iterative) */
+#define ANGLE_HISTORY_N      10   /* ring buffer length (10 * 20ms = 200ms accumulator) */
+#define ANGLE_CORRECT_DEG    10   /* below this magnitude, skip correction */
+#define MIN_DF_DELTA_CM      2    /* |dF_old - dF_new| < this -> ratio unreliable */
 
 /* HC-SR04 trigger */
 #define TRIG_PULSE        2
 
 /* ADC */
 #define ADC_POLL_TIMEOUT  0xFF
+
+/* ALIGN_PROGRESS side-wall avoidance: when a side reads < D_MIN cm, stop and
+ * pivot away by this many degrees (replaces the previous half-speed veer-off). */
+#define ROTATE_VEER_DEG   10
+
+/* After a small pivot (VEER or IR-triggered EMERGENCY), drive forward this
+ * long so the next FSM tick isn't stuck in the same trigger zone -- in-place
+ * pivots don't change position, so the trigger condition recurs without a
+ * forward step. Split per trigger because their geometry differs:
+ *   - VEER fires on side ultrasonic (further from front), needs longer escape
+ *   - IR fires near the front corners, shorter forward step is enough        */
+#define ESCAPE_FORWARD_MS_VEER 700
+#define ESCAPE_FORWARD_MS_IR   500
+#define VEER_COOLDOWN_TICKS    50   /* 50 * CTRL_PERIOD_MS = 1s lockout after each VEER */
+
+/* Pivot calibration mode — when 1, ControlTask skips the FSM and runs a
+ * 4x90° round-trip (right then left) so PIVOT_SUBSTEPS_90 can be measured
+ * against floor markings. Set to 0 for normal driving. */
+#define CALIB_PIVOT       0
+
+/* IR calibration mode — when 1, ControlTask skips the FSM, motors stay
+ * stopped, and IR readings stream to UART at 100ms cadence so a human
+ * can wave obstacles in front of each sensor to find IR_BUMPER_THRESH. */
+#define CALIB_IR          0
 
 /* ===========================================================================
  *  Peripherals
@@ -99,15 +136,25 @@ int dF = 0, dL = 0, dR = 0;            /* filtered distances (cm)        */
 int sF = 0, sL = 0, sR = 0;            /* per-window stddev (confidence) */
 int dF_prev = 0, dL_prev = 0, dR_prev = 0;
 
+/* Angle-correction ring buffer (filled by SensorTask each tick).
+ * angleCalculate() compares the oldest slot to the newest reading. */
+static int hist_dF[ANGLE_HISTORY_N];
+static int hist_dL[ANGLE_HISTORY_N];
+static int hist_dR[ANGLE_HISTORY_N];
+static int hist_idx   = 0;
+static int hist_count = 0;             /* warm-up counter; valid when == N */
+
 int ir_floor = 0, ir_left = 0, ir_right = 0;
 
-DriveState   state = START;
+DriveState   state = INIT;
 TrackingSide side  = TRACK_RIGHT;
 
 /* EMERGENCY commit state: lock turn direction until SEEK is stable for a while */
 static bool emerg_committed = false;
 static bool emerg_turn_left = false;
+static int  emerg_turn_deg  = EMERG_US_DEG;   /* committed rotation magnitude */
 static int  seek_clear_ticks = 0;
+static int  veer_cooldown_ticks = 0;   /* ALIGN_PROGRESS VEER lockout counter */
 #define EMERG_RELEASE_TICKS  25     /* ~500ms of clear SEEK -> release commit */
 
 /* ===========================================================================
@@ -120,17 +167,18 @@ static void Error_Handler(void);
 /* Sensing */
 int  median7(int *a);
 int  stddev7(int *a);
+void angleHistoryFlush(void);
 void SensorTask(void *arg);
 void IR_Task(void *arg);
+
+/* Debug */
+void DebugTask(void *arg);
 
 /* Control */
 void    Motor_Drive(int v_left, int v_right);
 void    Motor_Stop(void);
-void    rotate(int degrees, bool left);
-void    rotate_to_side(bool left);
-void    rotate_ticks(int degrees, bool left);
 void    rotate_iterative(int degrees, bool left);
-void    switchTracking(void);
+bool    switchTracking(void);
 void    angleAdjusting(void);
 int     angleCalculate(void);
 uint8_t canProgressDirection(void);
@@ -146,6 +194,11 @@ void    ControlTask(void *arg);
 #else
   #define PUTCHAR_PROTOTYPE int fputc(int ch, FILE *f)
 #endif
+/**
+ * @brief  Redirects single-character stdio output to UART1 so printf works.
+ * @param  ch  Character to emit (passed by stdio runtime).
+ * @return The same character, as expected by stdio.
+ */
 PUTCHAR_PROTOTYPE
 {
     HAL_UART_Transmit(&UartHandle1, (uint8_t *)&ch, 1, 0xFFFF);
@@ -157,6 +210,12 @@ PUTCHAR_PROTOTYPE
  *  7-sample window per signal -> filtered value (median) + confidence (stddev).
  *  Rate of change is derived from (d* - d*_prev).
  * =========================================================================== */
+
+/**
+ * @brief  Returns the median of SAMPLE_N (=7) integers via insertion sort.
+ * @param  a  Pointer to the sliding-window buffer (SAMPLE_N entries).
+ * @return The middle element after sorting a local copy (input is untouched).
+ */
 int median7(int *a)
 {
     int tmp[SAMPLE_N];
@@ -169,6 +228,11 @@ int median7(int *a)
     return tmp[SAMPLE_N / 2];
 }
 
+/**
+ * @brief  Integer-only standard deviation of SAMPLE_N (=7) samples.
+ * @param  a  Pointer to the sliding-window buffer.
+ * @return floor(sqrt(variance)); used as a per-sensor noise/confidence proxy.
+ */
 int stddev7(int *a)
 {
     long sum = 0;
@@ -185,6 +249,26 @@ int stddev7(int *a)
     return s;
 }
 
+/**
+ * @brief  Resets the angle-correction ring buffer to "warming up" state.
+ * @note   Called whenever past samples become semantically invalid:
+ *         after rotate_iterative() (heading changed) or on side switch.
+ *         Forces angleCalculate() to return 0 until N fresh samples are pushed.
+ */
+void angleHistoryFlush(void)
+{
+    hist_idx   = 0;
+    hist_count = 0;
+}
+
+/**
+ * @brief  RTOS task — samples HC-SR04 trio, filters them, feeds the angle buffer.
+ * @param  arg  Unused (FreeRTOS task signature).
+ * @note   Period = SENS_PERIOD_MS. Each tick: shifts US_TICKS_PER_CM-scaled
+ *         raw IC diffs into ring buffers, recomputes (dF, dL, dR) via median7
+ *         and (sF, sL, sR) via stddev7, then pushes the filtered triple into
+ *         the arctan history buffer (hist_d*).
+ */
 void SensorTask(void *arg)
 {
     (void)arg;
@@ -203,6 +287,13 @@ void SensorTask(void *arg)
         sL = stddev7(us_buf_L);
         sR = stddev7(us_buf_R);
 
+        /* Push filtered values into angle-correction ring buffer. */
+        hist_dF[hist_idx] = dF;
+        hist_dL[hist_idx] = dL;
+        hist_dR[hist_idx] = dR;
+        hist_idx = (hist_idx + 1) % ANGLE_HISTORY_N;
+        if (hist_count < ANGLE_HISTORY_N) hist_count++;
+
         osDelay(SENS_PERIOD_MS);
     }
 }
@@ -210,6 +301,12 @@ void SensorTask(void *arg)
 /* ===========================================================================
  *  Sensing Layer — IR_Task
  * =========================================================================== */
+/**
+ * @brief  RTOS task — polls the three IR ADC channels (left, right, floor).
+ * @param  arg  Unused (FreeRTOS task signature).
+ * @note   Period = IR_PERIOD_MS. Stores raw 12-bit ADC values into
+ *         ir_left/ir_right/ir_floor for ControlTask diagnostics.
+ */
 void IR_Task(void *arg)
 {
     (void)arg;
@@ -228,6 +325,59 @@ void IR_Task(void *arg)
         ir_floor = (int)HAL_ADC_GetValue(&AdcHandle3);
 
         osDelay(IR_PERIOD_MS);
+        printf("\r\n[IR_Bumping]Left : %d, Right : %d", ir_left, ir_right);
+    }
+}
+
+/* ===========================================================================
+ *  Debug Layer — DebugTask
+ *  Two outputs:
+ *    1) Edge log on every FSM state transition (printed once per change).
+ *    2) Periodic snapshot every DBG_PERIOD_MS with distances, stddev, side,
+ *       emergency-commit info, and IR readings.
+ *  Lowest priority so it never starves Sensor/IR/Control.
+ * =========================================================================== */
+void DebugTask(void *arg)
+{
+    (void)arg;
+    static const char *state_name[] = {
+        "INIT", "SEEK", "ALIGN_PROG", "NON_ALIGN_PROG", "EMERGENCY"
+    };
+    DriveState prev_state = (DriveState)0xFF;   /* force first-tick edge log */
+    TrackingSide prev_side = side;
+    uint32_t tick = 0;
+
+    osDelay(TASK_WARMUP_MS);
+    for (;;) {
+        if (state != prev_state) {
+            printf("\r\n[DBG-EDGE] %s -> %s  dF=%d dL=%d dR=%d side=%s",
+                   (prev_state == (DriveState)0xFF) ? "?" : state_name[prev_state],
+                   state_name[state],
+                   dF, dL, dR,
+                   side == TRACK_RIGHT ? "R" : "L");
+            prev_state = state;
+        }
+        if (side != prev_side) {
+            printf("\r\n[DBG-SIDE] %s -> %s",
+                   prev_side == TRACK_RIGHT ? "R" : "L",
+                   side      == TRACK_RIGHT ? "R" : "L");
+            prev_side = side;
+        }
+
+        printf("\r\n[DBG #%lu] st=%s side=%s "
+               "d(F/L/R)=%d/%d/%d s(F/L/R)=%d/%d/%d "
+               "emg=%c commit=%c hist=%d ir(L/R/F)=%d/%d/%d",
+               (unsigned long)tick++,
+               state_name[state],
+               side == TRACK_RIGHT ? "R" : "L",
+               dF, dL, dR,
+               sF, sL, sR,
+               isEmergency() ? '1' : '0',
+               emerg_committed ? (emerg_turn_left ? 'L' : 'R') : '-',
+               hist_count,
+               ir_left, ir_right, ir_floor);
+
+        osDelay(DBG_PERIOD_MS);
     }
 }
 
@@ -236,6 +386,15 @@ void IR_Task(void *arg)
  *  v_left / v_right ∈ [-PWM_PERIOD, +PWM_PERIOD].  Sign = direction.
  *  TIM8 drives right motor (CH1=fwd, CH2=rev); TIM4 drives left (CH2=fwd, CH1=rev).
  * =========================================================================== */
+
+/**
+ * @brief  Sets PWM duty on both motors; sign encodes direction.
+ * @param  v_left   Signed duty for left  wheel; positive = forward.
+ * @param  v_right  Signed duty for right wheel; positive = forward.
+ * @note   Magnitudes are clamped to PWM_PERIOD. Idle channel gets CCR=0 (PWM1
+ *         mode outputs LOW), the active channel gets |v|. Channels are pre-
+ *         started in main(); this function only updates compare registers.
+ */
 void Motor_Drive(int v_left, int v_right)
 {
     /* PWM channels are pre-started in main(); we just gate by CCR.
@@ -254,35 +413,36 @@ void Motor_Drive(int v_left, int v_right)
     else              { TIM4->CCR2 = 0;  TIM4->CCR1 = aL; }
 }
 
+/**
+ * @brief  Coasts the robot — both motors get zero duty without disabling PWM.
+ * @note   Uses Motor_Drive(0, 0) so the PWM channels stay enabled and the
+ *         next non-zero call takes effect immediately. HAL_TIM_PWM_Stop()
+ *         would have to be matched by a Start() and is intentionally avoided.
+ */
 void Motor_Stop(void)
 {
-    /* Keep PWM channels running; just zero the duty so motor coasts.
-     * (HAL_TIM_PWM_Stop would disable the channel and subsequent
-     *  Motor_Drive(CCR=..) writes would produce no output.) */
     Motor_Drive(0, 0);
 }
 
-/* Blocking in-place pivot by `degrees` toward `left` (true=CCW, false=CW).
- * Uses TURN_90_MS calibration; scales linearly for other angles.
- * Blocks ControlTask for ~(TURN_90_MS * degrees / 90) ms. */
-void rotate(int degrees, bool left)
-{
-    int ms = (TURN_90_MS * degrees) / 90;
-    if (ms <= 0) return;
-    if (left) Motor_Drive(-V_TURN,  V_TURN);   /* pivot left  (CCW) */
-    else      Motor_Drive( V_TURN, -V_TURN);   /* pivot right (CW)  */
-    osDelay(ms);
-    Motor_Stop();
-}
-
-/* Iterative encoder-based pivot (term_code.c pattern).
- *   N micro-pivots of M ticks each = `degrees` total.
- *   Each micro-pivot: stop, reset encoder, drive until ticks reached, stop.
- *   Uses the wheel that goes FORWARD for this pivot direction
- *   (avoids quadrature sign issues; matches term_code's turnLeft/turnRight). */
+/**
+ * @brief  Closed-loop in-place pivot driven by encoder ticks, in micro-steps.
+ * @param  degrees  Magnitude of rotation in degrees (positive).
+ * @param  left     true => pivot CCW (left turn); false => pivot CW (right).
+ * @note   Decomposes the turn into `PIVOT_SUBSTEPS_90 * degrees / 90`
+ *         micro-pivots, each consuming PIVOT_SUBSTEP_TICKS ticks on the wheel
+ *         that goes forward for this direction. Stops between micro-steps to
+ *         null out inertia. Settles POST_TURN_SETTLE_MS so the median filter
+ *         refreshes, then calls angleHistoryFlush() — every rotation
+ *         invalidates the arctan ring buffer's heading assumption.
+ */
 void rotate_iterative(int degrees, bool left)
 {
-    int substeps = (PIVOT_SUBSTEPS_90 * degrees) / 90;
+    /* Hardware wiring inverts our software convention -- callers say "left"
+     * but the original wheel mapping rotates the opposite way. Flip here so
+     * every call site (VEER, EMERGENCY, CALIB_PIVOT) is corrected in one place. */
+    left = !left;
+    int subs90 = left ? PIVOT_SUBSTEPS_90_L : PIVOT_SUBSTEPS_90_R;
+    int substeps = (subs90 * degrees) / 90;
     if (substeps <= 0) return;
 
     /* pivot LEFT  (CCW): right wheel forward -> use motorInterrupt1
@@ -293,11 +453,17 @@ void rotate_iterative(int degrees, bool left)
     for (int i = 0; i < substeps; i++) {
         Motor_Stop();
         osDelay(PIVOT_PAUSE_MS);
-        *enc = 1;
+        *enc = 0;
         if (left) Motor_Drive(-V_TURN,  V_TURN);
         else      Motor_Drive( V_TURN, -V_TURN);
+        /* Encoder ISR may ++ or -- depending on wheel-direction polarity
+         * (mirrored motors on differential drive). Cast to int16_t so an
+         * underflow (0 -> 65535) reads as -1, and compare |displacement|. */
         int t = 0;
-        while (*enc < PIVOT_SUBSTEP_TICKS && t < PIVOT_SUBSTEP_TIMEOUT_MS) {
+        while (t < PIVOT_SUBSTEP_TIMEOUT_MS) {
+            int16_t s = (int16_t)*enc;
+            if (s < 0) s = -s;
+            if (s >= PIVOT_SUBSTEP_TICKS) break;
             osDelay(1);
             t++;
         }
@@ -307,99 +473,149 @@ void rotate_iterative(int degrees, bool left)
     printf("\r\n>> ROT-ITER %s deg=%d substeps=%d ms=%d",
            left ? "L" : "R", degrees, substeps, total_ms);
     osDelay(POST_TURN_SETTLE_MS);
-}
-
-/* Encoder-driven pivot: snapshots right encoder, drives until |Δticks| >= target.
- * Includes safety timeout and post-rotation settle so the median filter
- * reflects the new orientation before SEEK takes over. */
-void rotate_ticks(int degrees, bool left)
-{
-    int target = (TICKS_PER_90 * degrees) / 90;
-    if (target <= 0) return;
-
-    int start = (int)motorInterrupt1;
-    int elapsed = 0;
-    int diff = 0;
-
-    if (left) Motor_Drive(-V_TURN,  V_TURN);
-    else      Motor_Drive( V_TURN, -V_TURN);
-
-    while (elapsed < ROTATE_TIMEOUT_MS) {
-        osDelay(10);
-        elapsed += 10;
-        diff = (int)motorInterrupt1 - start;
-        if (diff < 0) diff = -diff;
-        if (diff >= target) break;
-    }
-    Motor_Stop();
-    printf("\r\n>> ROT %s deg=%d ticks=%d/%d ms=%d",
-           left ? "L" : "R", degrees, diff, target, elapsed);
-
-    /* Settle: hold still while median filter (~7 samples) refreshes
-     * with the post-rotation orientation. Critical to avoid charging
-     * forward on stale dF reading. */
-    osDelay(POST_TURN_SETTLE_MS);
-}
-
-/* Sensor-driven 90° pivot — no time calibration needed.
- * Snapshots the side distance, then rotates until front reads near that value.
- * `min_ms` avoids premature exit on transient dF readings.
- * `max_ms` is a safety timeout if convergence never happens (open space). */
-void rotate_to_side(bool left)
-{
-    const int min_ms = 200;
-    const int max_ms = 2500;
-    const int tol    = 3;       /* cm */
-    int target = left ? dR : dL;
-    int elapsed = 0;
-
-    if (left) Motor_Drive(-V_TURN,  V_TURN);
-    else      Motor_Drive( V_TURN, -V_TURN);
-
-    while (elapsed < max_ms) {
-        osDelay(20);
-        elapsed += 20;
-        int diff = dF - target;
-        if (diff < 0) diff = -diff;
-        if (elapsed >= min_ms && dF > 0 && diff <= tol) break;
-    }
-    Motor_Stop();
+    angleHistoryFlush();   /* heading changed -> all prior samples invalid */
 }
 
 /* ===========================================================================
  *  Control Layer — helpers
  * =========================================================================== */
-void switchTracking(void)
+
+/**
+ * @brief  Sticky dynamic wall tracking — only swaps `side` when current is lost.
+ * @return true if a usable tracked wall is in place after the call,
+ *         false if both sides lack a wall within D_TARGET.
+ * @note   Sticky policy: a working track is never preempted. If the current
+ *         side fails but the opposite side has a wall, `side` flips and the
+ *         angle history is flushed (the heading-relative correlation we were
+ *         tracking is now against a different wall).
+ */
+bool switchTracking(void)
 {
-    /* TODO: flip `side` based on which wall is closer / more stable.
-     *       Compare (dL, sL) vs (dR, sR); prefer the lower-stddev side. */
+    bool cur_ok, alt_ok;
+    if (side == TRACK_RIGHT) {
+        cur_ok = (dR > 0 && dR <= D_TARGET);
+        alt_ok = (dL > 0 && dL <= D_TARGET);
+    } else {
+        cur_ok = (dL > 0 && dL <= D_TARGET);
+        alt_ok = (dR > 0 && dR <= D_TARGET);
+    }
+
+    if (cur_ok) return true;
+    if (alt_ok) {
+        side = (side == TRACK_RIGHT) ? TRACK_LEFT : TRACK_RIGHT;
+        angleHistoryFlush();
+        return true;
+    }
+    return false;
 }
 
-void angleAdjusting(void)
-{
-    /* TODO: small differential nudge to drive angleCalculate() toward 0.
-     *       Use Motor_Drive() with asymmetric v_left/v_right. */
-}
+/* Source sensor of the most recent non-zero angleCalculate() result.
+ * Consumed by angleAdjusting() to pick rotation direction. */
+static TrackingSide angle_source = TRACK_RIGHT;
 
+/**
+ * @brief  Heading deviation in degrees, derived by arctan over a 200ms window.
+ * @return Signed degrees; 0 means "skip correction this tick". Sign is
+ *         per-wall (NOT unified): from R sensor, +deg => tilted toward right
+ *         wall; from L sensor, +deg => tilted toward left wall. The source
+ *         sensor of a non-zero result is left in `angle_source` for the
+ *         caller (angleAdjusting) to interpret.
+ * @note   Independent of `side` — picks dR first if both current and oldest
+ *         dR samples are valid; falls back to dL otherwise. Returns 0 when
+ *         the ring buffer isn't warm yet, |ΔdF| < MIN_DF_DELTA_CM (robot
+ *         essentially stationary / no front motion to differentiate), or
+ *         neither side has paired valid samples.
+ *           tan(θ_R) = (dR_old - dR_new) / (dF_old - dF_new)
+ *           tan(θ_L) = (dL_old - dL_new) / (dF_old - dF_new)
+ */
 int angleCalculate(void)
 {
-    /* TODO: estimate yaw error from rate-of-change on the tracked side.
-     *       Positive = drifting away from wall, negative = drifting in. */
-    return 0;
+    if (hist_count < ANGLE_HISTORY_N) return 0;
+
+    int oldest = hist_idx;             /* slot about to be overwritten = oldest */
+    int dF_old = hist_dF[oldest];
+    int denom  = dF_old - dF;
+    int adenom = denom < 0 ? -denom : denom;
+    if (adenom < MIN_DF_DELTA_CM) return 0;
+
+    int dR_old = hist_dR[oldest];
+    int dL_old = hist_dL[oldest];
+    float denom_f = (float)denom;
+    float tan_theta;
+
+    if (dR > 0 && dR_old > 0) {
+        tan_theta    = (float)(dR_old - dR) / denom_f;
+        angle_source = TRACK_RIGHT;
+    } else if (dL > 0 && dL_old > 0) {
+        tan_theta    = (float)(dL_old - dL) / denom_f;
+        angle_source = TRACK_LEFT;
+    } else {
+        return 0;
+    }
+
+    float theta_rad = atanf(tan_theta);
+    return (int)(theta_rad * 57.2957795f);   /* rad -> deg */
 }
 
+/**
+ * @brief  Event-driven heading correction — runs once per ALIGN_PROGRESS tick.
+ * @note   |θ| < ANGLE_CORRECT_DEG  =>  straight cruise at V_CRUISE (most ticks).
+ *         |θ| >= ANGLE_CORRECT_DEG =>  stop, in-place pivot by |θ|, then resume
+ *         (rotate_iterative auto-flushes the history). Rotation direction is
+ *         picked from `angle_source` so the per-wall sign convention from
+ *         angleCalculate() is interpreted correctly.
+ */
+void angleAdjusting(void)
+{
+    int deg = angleCalculate();
+    int mag = deg < 0 ? -deg : deg;
+
+    if (mag < ANGLE_CORRECT_DEG) {
+        Motor_Drive(V_CRUISE + V_TRIM_L, V_CRUISE);
+        return;
+    }
+
+    bool turn_left = (angle_source == TRACK_RIGHT) ? (deg > 0) : (deg < 0);
+
+    printf("\r\n>> ANG-CORR theta=%d src=%s turn=%s",
+           deg, angle_source == TRACK_RIGHT ? "R" : "L", turn_left ? "L" : "R");
+
+    Motor_Stop();
+    osDelay(50);
+    rotate_iterative(mag, turn_left);
+}
+
+/**
+ * @brief  Picks the side with more open space (wider distance).
+ * @return DIR_LEFT or DIR_RIGHT — whichever side reads further.
+ * @note   No fixed threshold (EMG_FRONT no longer used here); just compares
+ *         dL vs dR. A reading of 0 means "no echo" which we treat as
+ *         effectively wide-open. Used by EMERGENCY to choose pivot direction.
+ */
 uint8_t canProgressDirection(void)
 {
-    /* TODO: return bitmask of DIR_LEFT | DIR_FORWARD | DIR_RIGHT. */
-    return 0;
+    int eff_L = (dL == 0) ? 9999 : dL;
+    int eff_R = (dR == 0) ? 9999 : dR;
+    return (eff_L >= eff_R) ? DIR_LEFT : DIR_RIGHT;
 }
 
+/**
+ * @brief  True when a forward obstacle is close enough to require evasion.
+ * @return dF in (0, EMG_FRONT] OR a side IR bumper reads above IR_BUMPER_THRESH
+ *         (direct sensor: higher ADC = closer).
+ */
 bool isEmergency(void)
 {
-    /* Floor IR not wired on this build -> rely on front ultrasonic only. */
-    return (dF > 0 && dF <= EMG_FRONT);
+    return (dF > 0 && dF <= EMG_FRONT) ||
+           (ir_left  > IR_BUMPER_THRESH) ||
+           (ir_right > IR_BUMPER_THRESH);
 }
 
+/**
+ * @brief  True when the front has cleared past the hysteresis threshold.
+ * @return dF > EMG_FRONT + EMG_FRONT_HYST. Used to release EMERGENCY commit
+ *         once the robot is solidly back into safe territory.
+ */
 bool emergencyResolved(void)
 {
     return (dF > EMG_FRONT + EMG_FRONT_HYST);
@@ -408,77 +624,158 @@ bool emergencyResolved(void)
 /* ===========================================================================
  *  Control Layer — FSM
  * =========================================================================== */
+/**
+ * @brief  RTOS task — runs the 5-state drive FSM each CTRL_PERIOD_MS.
+ * @param  arg  Unused (FreeRTOS task signature).
+ * @note   States: INIT -> SEEK -> ALIGN_PROGRESS <-> NON_ALIGN_PROGRESS;
+ *         EMERGENCY preempts any state when isEmergency() trips and returns
+ *         to SEEK after a committed 90° rotate_iterative(). ALIGN_PROGRESS
+ *         is the only state that calls angleAdjusting(). LED1 toggles every
+ *         ~500ms and a diagnostic line is printed at the same cadence.
+ */
 void ControlTask(void *arg)
 {
     (void)arg;
     static const char *state_name[] = {
-        "START","SEEK","ALIGNED","LOCKED","EMERGENCY","INTERSECT","ENCOUNT","STOP"
+        "INIT","SEEK","ALIGN_PROG","NON_ALIGN_PROG","EMERGENCY"
     };
     uint32_t tick = 0;
 
     osDelay(CTRL_WARMUP_MS);
+
+#if CALIB_PIVOT
+    /* Calibration: 4×90° left only (right side locked from prior calibration).
+     * Mark heading on floor before boot, compare on stop. Tune PIVOT_SUBSTEPS_90_L. */
+    osDelay(1000);
+    for (int i = 0; i < 4; i++) {
+        printf("\r\n>> CALIB L %d/4", i + 1);
+        rotate_iterative(90, true);
+        osDelay(1000);
+    }
+    printf("\r\n>> CALIB DONE");
+    Motor_Stop();
+    for (;;) osDelay(1000);   /* trap — flip CALIB_PIVOT to 0 and reflash */
+#endif
+
+#if CALIB_IR
+    /* Motors off, stream IR readings to UART at 10 Hz.
+     * Move obstacles past each sensor and note the ADC at "this is too close".
+     * That value -> set IR_BUMPER_THRESH (when re-enabling IR bumper logic). */
+    Motor_Stop();
+    printf("\r\n>> CALIB IR START");
     for (;;) {
+        printf("\r\n>> IR L=%d R=%d F=%d", ir_left, ir_right, ir_floor);
+        osDelay(100);
+    }
+#endif
+
+    for (;;) {
+        /* Top-level guard: any state can be preempted by EMERGENCY. */
         if (isEmergency()) state = EMERGENCY;
 
-        /* LED1 toggles every ~500ms -> visual proof scheduler is alive */
-        if ((tick++ % 25) == 0) {
-            BSP_LED_Toggle(LED1);
-            printf("\r\n[%s] dF=%d dL=%d dR=%d | sF=%d sL=%d sR=%d | irF=%d irL=%d irR=%d",
-                   state_name[state], dF, dL, dR, sF, sL, sR, ir_floor, ir_left, ir_right);
-        }
-
         switch (state) {
-            case START:
-                /* TODO: wait until sensors warm up; transition to SEEK. */
-                state = SEEK;
+            case INIT:
+                /* Wait for first valid front + any side reading. */
+                if (dF > 0 && (dL > 0 || dR > 0)) state = SEEK;
                 break;
 
             case SEEK: {
-                /* Drive forward; veer away from whichever side gets too close. */
-                int vL = V_CRUISE, vR = V_CRUISE;
-                if (dR > 0 && dR < D_MIN) vR = V_CRUISE / 2;   /* right wall close -> curve left */
-                if (dL > 0 && dL < D_MIN) vL = V_CRUISE / 2;   /* left  wall close -> curve right */
+                /* No tracked wall yet — cruise forward, veer AWAY from a side that gets dangerously close.
+                 * Differential drive: slowing the FAR-side wheel pivots the robot away from the near wall. */
+                int vL = V_CRUISE + V_TRIM_L, vR = V_CRUISE;   /* trimmed straight default */
+                if (dR > 0 && dR < D_MIN) vL = V_CRUISE / 2;   /* R wall close -> slow L -> veer LEFT (override trim) */
+                if (dL > 0 && dL < D_MIN) vR = V_CRUISE / 2;   /* L wall close -> slow R -> veer RIGHT */
                 Motor_Drive(vL, vR);
 
-                /* Release direction commitment after stable SEEK time */
+                if (switchTracking()) state = ALIGN_PROGRESS;
                 if (++seek_clear_ticks >= EMERG_RELEASE_TICKS) emerg_committed = false;
             } break;
 
-            case ALIGNED:
-                /* TODO: cruise. angleAdjusting() each tick; watch dF for INTERSECT. */
-                break;
+            case ALIGN_PROGRESS: {
+                /* Sticky tracking: only swaps if current side is lost.
+                 * Returns false -> no usable wall on either side -> demote. */
+                if (!switchTracking()) {
+                    state = NON_ALIGN_PROGRESS;
+                    break;
+                }
 
-            case LOCKED:
-                /* TODO: all sides under D_MIN — back off and re-seek. */
-                break;
+                /* Side-wall avoidance: stop, pivot away, then drive forward briefly so
+                 * the next tick isn't stuck in the same trigger zone. After firing,
+                 * VEER is locked out for VEER_COOLDOWN_TICKS ticks so consecutive
+                 * triggers don't whip the robot back and forth. */
+                if (veer_cooldown_ticks > 0) veer_cooldown_ticks--;
+
+                if (veer_cooldown_ticks == 0 && dR > 0 && dR < D_MIN) {
+                    printf("\r\n>> VEER L deg=%d dR=%d", ROTATE_VEER_DEG, dR);
+                    Motor_Stop();
+                    osDelay(50);
+                    rotate_iterative(ROTATE_VEER_DEG, true);   /* R wall close -> pivot LEFT */
+                    Motor_Drive(V_CRUISE + V_TRIM_L, V_CRUISE);
+                    osDelay(ESCAPE_FORWARD_MS_VEER);
+                    veer_cooldown_ticks = VEER_COOLDOWN_TICKS;
+                } else if (veer_cooldown_ticks == 0 && dL > 0 && dL < D_MIN) {
+                    printf("\r\n>> VEER R deg=%d dL=%d", ROTATE_VEER_DEG, dL);
+                    Motor_Stop();
+                    osDelay(50);
+                    rotate_iterative(ROTATE_VEER_DEG, false);  /* L wall close -> pivot RIGHT */
+                    Motor_Drive(V_CRUISE + V_TRIM_L, V_CRUISE);
+                    osDelay(ESCAPE_FORWARD_MS_VEER);
+                    veer_cooldown_ticks = VEER_COOLDOWN_TICKS;
+                } else {
+                    Motor_Drive(V_CRUISE + V_TRIM_L, V_CRUISE);
+                }
+
+                if (++seek_clear_ticks >= EMERG_RELEASE_TICKS) emerg_committed = false;
+            } break;
+
+            case NON_ALIGN_PROGRESS: {
+                /* No tracked wall — drive straight; promote back to ALIGN once one appears. */
+                Motor_Drive(V_CRUISE + V_TRIM_L, V_CRUISE);
+
+                if (switchTracking()) state = ALIGN_PROGRESS;
+                if (++seek_clear_ticks >= EMERG_RELEASE_TICKS) emerg_committed = false;
+            } break;
 
             case EMERGENCY: {
+                /* Front-blocked (ultrasonic) ALWAYS takes priority over IR --
+                 * a wall ahead needs a full 90° pivot even if a side IR also
+                 * trips. US branch picks the wider side via canProgressDirection().
+                 * IR branch is a 45° nudge away from the tripped bumper.
+                 *
+                 * Commit on first entry; reuse until SEEK clears. */
                 bool first = !emerg_committed;
                 if (first) {
-                    emerg_turn_left = (dL >= dR);
+                    bool front_emerg = (dF > 0 && dF <= EMG_FRONT);
+                    bool ir_l_hit   = (ir_left  > IR_BUMPER_THRESH);
+                    bool ir_r_hit   = (ir_right > IR_BUMPER_THRESH);
+
+                    if (front_emerg) {
+                        emerg_turn_deg = EMERG_US_DEG;
+                        emerg_turn_left = (canProgressDirection() == DIR_LEFT);
+                    } else if (ir_l_hit || ir_r_hit) {
+                        emerg_turn_deg = EMERG_IR_DEG;
+                        if (ir_l_hit && ir_r_hit) emerg_turn_left = (ir_right > ir_left);  /* away from higher (closer) */
+                        else if (ir_l_hit)        emerg_turn_left = false;                  /* left bumper  -> turn RIGHT */
+                        else                      emerg_turn_left = true;                   /* right bumper -> turn LEFT  */
+                    }
                     emerg_committed = true;
                 }
                 seek_clear_ticks = 0;
-                printf("\r\n>> EMERG %s commit=%s dF=%d dL=%d dR=%d",
-                       emerg_turn_left ? "LEFT" : "RIGHT",
-                       first ? "NEW" : "KEEP", dF, dL, dR);
+                printf("\r\n>> EMERG %s deg=%d commit=%s dF=%d dL=%d dR=%d ir(L/R)=%d/%d",
+                       emerg_turn_left ? "LEFT" : "RIGHT", emerg_turn_deg,
+                       first ? "NEW" : "KEEP", dF, dL, dR, ir_left, ir_right);
                 Motor_Stop();
                 osDelay(50);
-                rotate_iterative(90, emerg_turn_left);   /* term_code pattern, with settle */
+                rotate_iterative(emerg_turn_deg, emerg_turn_left);
+                /* IR-triggered EMERGENCY uses a small rotation (30°) that often
+                 * leaves the robot still inside the trigger zone; add a brief
+                 * forward escape to break the loop. US (90°) doesn't need it. */
+                if (emerg_turn_deg == EMERG_IR_DEG) {
+                    Motor_Drive(V_CRUISE + V_TRIM_L, V_CRUISE);
+                    osDelay(ESCAPE_FORWARD_MS_IR);
+                }
                 state = SEEK;
             } break;
-
-            case INTERSECT:
-                /* TODO: use canProgressDirection() to pick a turn. */
-                break;
-
-            case ENCOUNT:
-                /* TODO: brief pause; if obstacle persists, treat as wall. */
-                break;
-
-            case STOP:
-                Motor_Stop();
-                break;
         }
         osDelay(CTRL_PERIOD_MS);
     }
@@ -487,6 +784,14 @@ void ControlTask(void *arg)
 /* ===========================================================================
  *  main
  * =========================================================================== */
+/**
+ * @brief  System entry point: brings up peripherals, then launches the RTOS.
+ * @return Never returns in normal operation. If vTaskStartScheduler() falls
+ *         through, LED2 lights solid as a fault indicator and the loop spins.
+ * @note   Init order: HAL_Init -> SystemClock_Config -> UART/LED -> motor PWM
+ *         (TIM8/TIM4) -> EXTI (encoders) -> ultrasonic IC (TIM3) + trigger
+ *         (TIM10) -> three ADCs for IR -> task creation -> scheduler start.
+ */
 int main(void)
 {
     GPIO_InitTypeDef GPIO_InitStruct;
@@ -645,6 +950,7 @@ int main(void)
     xTaskCreate(SensorTask,  "sensor",   512, NULL, 3, NULL);
     xTaskCreate(IR_Task,     "ir",       512, NULL, 3, NULL);
     xTaskCreate(ControlTask, "control", 1024, NULL, 2, NULL);
+    xTaskCreate(DebugTask,   "debug",    512, NULL, 1, NULL);
     vTaskStartScheduler();
 
     /* Only reached if scheduler failed -> LED2 solid ON as fault marker */
@@ -655,6 +961,11 @@ int main(void)
 /* ===========================================================================
  *  System clock
  * =========================================================================== */
+/**
+ * @brief  Configures HSE+PLL clock tree to 180MHz with overdrive.
+ * @note   PLL: HSE / 25 * 360 / 2 = 180MHz SYSCLK. AHB=180, APB1=45, APB2=90.
+ *         Flash latency set to 5 wait states for 180MHz operation.
+ */
 static void SystemClock_Config(void)
 {
     RCC_ClkInitTypeDef RCC_ClkInitStruct;
@@ -684,6 +995,12 @@ static void SystemClock_Config(void)
 }
 
 #ifdef USE_FULL_ASSERT
+/**
+ * @brief  HAL assert hook used when USE_FULL_ASSERT is defined.
+ * @param  file  Source file where the assert tripped (unused).
+ * @param  line  Line number of the failing assert (unused).
+ * @note   Currently traps in an infinite loop without logging.
+ */
 void assert_failed(uint8_t *file, uint32_t line)
 {
     (void)file; (void)line;
@@ -694,6 +1011,13 @@ void assert_failed(uint8_t *file, uint32_t line)
 /* ===========================================================================
  *  ISR callbacks
  * =========================================================================== */
+/**
+ * @brief  EXTI ISR — increments encoder counters from quadrature edges.
+ * @param  GPIO_Pin  Pin that triggered the EXTI (PA15 = right, PB4 = left).
+ * @note   Reads the partner pin (PB3 / PB5) to decide direction. Counter
+ *         increments on logic-0 partner, decrements on logic-1. `READY` is
+ *         the sentinel between edges so transient reads don't double-count.
+ */
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
     switch (GPIO_Pin) {
@@ -710,6 +1034,14 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
     }
 }
 
+/**
+ * @brief  TIM input-capture ISR — measures HC-SR04 echo pulse widths on TIM3.
+ * @param  htim  HAL timer handle; only TIM3 is handled here.
+ * @note   Each of CH2 (right), CH3 (front), CH4 (left) toggles capture
+ *         polarity on every edge. Pulse width = falling - rising, with
+ *         16-bit wraparound handled inline. Result feeds uwDiffCapture1/2/3
+ *         consumed by SensorTask (divided by US_TICKS_PER_CM for cm).
+ */
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
 {
     if (htim->Instance != TIM3) return;
@@ -752,12 +1084,22 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
     }
 }
 
+/**
+ * @brief  Fatal-error trap — lights LED3 and stops forward progress.
+ * @note   Called when an HAL init routine returns HAL_ERROR. No recovery.
+ */
 static void Error_Handler(void)
 {
     BSP_LED_On(LED3);
     while (1) { }
 }
 
+/**
+ * @brief  Wires up the encoder EXTI lines (PA15, PB3/4/5) and enables NVIC.
+ * @note   PA15 -> EXTI15_10 (right encoder edge). PB4 -> EXTI4 (left encoder
+ *         edge). PB3/PB5 are partner pins read inside the EXTI callback to
+ *         determine rotation direction. All set to rising-edge interrupts.
+ */
 static void EXTILine_Config(void)
 {
     GPIO_InitTypeDef GPIO_InitStructure;

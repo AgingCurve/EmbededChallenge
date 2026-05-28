@@ -18,16 +18,16 @@
 #define READY                           3
 
 
-/* ---------- FSM types ---------- */
+/* ---------- FSM types ----------
+ * Naive baseline FSM: Non-Island world + Dynamic Wall Tracking.
+ * Pessimistic transitions — drop out of ALIGN at the first sign of
+ * tracked-wall loss, re-enter ALIGN only with stable readings. */
 typedef enum {
-    START = 0,   /* Initial state */
-    SEEK,        /* Search for a wall to track */
-    ALIGNED,     /* Aligned with nearest wall (cruise) */
-    LOCKED,      /* All sides under D_MIN — escape needed */
-    EMERGENCY,   /* Imminent collision */
-    INTERSECT,   /* Junction / corner decision */
-    ENCOUNT,     /* Moving obstacle encountered */
-    STOP         /* Halted */
+    INIT = 0,                /* sensor warm-up; wait for valid readings */
+    SEEK,                    /* searching for any side wall */
+    ALIGN_PROGRESS,          /* tracked wall locked; angle-corrected cruise */
+    NON_ALIGN_PROGRESS,      /* no tracked wall; blind forward until one appears */
+    EMERGENCY                /* imminent front collision -> pivot */
 } DriveState;
 
 typedef enum {
